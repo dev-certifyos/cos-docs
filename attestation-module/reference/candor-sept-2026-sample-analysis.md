@@ -88,7 +88,7 @@ Difference from the first tab, column by column: same practitioner-level Candor 
 
 **Not as a second tab.** Two reasons independent of format taste:
 
-1. **It breaks the one-parse-path rule.** Our ingestion (doc 4) validates one signed schema per delivery. A workbook with two sheets of different shapes is two schemas, two parsers, two sets of column checks, and a join step (by NPI) that has to run before any row can be dispositioned — plus the 7-orphan-NPI problem above.
+1. **It breaks the one-parse-path rule.** Our ingestion (the directory accuracy doc; drafted as the retired doc 4) validates one signed schema per delivery. A workbook with two sheets of different shapes is two schemas, two parsers, two sets of column checks, and a join step (by NPI) that has to run before any row can be dispositioned — plus the 7-orphan-NPI problem above.
 2. **It hides the move.** The reviewer's most important question on a location removal is "where did the provider go?" With two tabs the answer lives in a different sheet, keyed only by NPI, with no cross-reference. In our one-row-per-finding format the `REMOVE practice_address` and `ADD practice_address` rows sit side by side under the same NPI.
 
 **Your instinct — one tab, more columns — is right, with a refinement.** There are two ways to flatten:
@@ -137,7 +137,7 @@ Our sample recommendations file already models everything the September sample d
 
 - Transport (`from/`/`to/`, `candor-health` account), batch id, filename echo, schema versioning, idempotency, processing guarantees (proposal §2, §3, §6, §7). Candor's sample has none of these; they remain our asks.
 - Export template (§4). Candor's client-input set confirms we send fields, not NPIs.
-- `ingestion.md` adapter design: the vendor-specific pivot lives in the Candor adapter either way.
+- Adapter design (retired draft `platform/directory-accuracy/source-material/ingestion.md`, to be carried into `directory-accuracy.md`): the vendor-specific pivot lives in the Candor adapter either way.
 
 ---
 

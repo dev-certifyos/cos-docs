@@ -1,5 +1,7 @@
 # Companion — Ingestion module (concepts + supplementary material)
 
+> **RETIRED DRAFT — not a live design document.** This was the companion to doc 4 (external source ingestion) of the attestation-module series (formerly `attestation-module/modules/04-ingestion/`). The external-vendor program was decoupled from the attestation workflow on 2026-09-08 (source-of-truth v2 decision register entry D2-38, the decoupling decision), and the whole vendor program now has **one** standalone design doc: `platform/directory-accuracy/directory-accuracy.md` (to be written; its companion `directory-accuracy-concepts.md` exists). These drafts were moved here 2026-09-09 as source material for that doc — nothing in them is binding, and the internal "doc N" cross-references below refer to the retired attestation-series numbering.
+
 Vocabulary first, deep-dive material second. Concepts entries carry no design decisions — the module doc (`ingestion.md`) owns the design.
 
 ## Messaging and processing concepts

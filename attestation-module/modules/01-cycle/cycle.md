@@ -18,9 +18,9 @@ This module answers one question on a loop: **which practitioners owe an attesta
 - **Advancing the clock** — creating the *next* obligation after a submission belongs to the submission flow (docs 2/5). This module defines the row shape it inserts; the rules are recorded in *Contracts*.
 - **Storing provider data** — the OV stays the golden record of provider facts. This module reads it (backfill population, export, prefill) and never writes it.
 - Building and sending emails — the **Smart Outreach Service** (platform doc `smart-outreach-service.md`) does that: it owns the templates, the recipient registry, the send queue, SendGrid, and the delivery outcomes. This module publishes commands to it and consumes its outcomes (doc 5 hosts the consumer). The legacy `smart_outreach` engine in `api-layer` is not involved.
-- The vendor export file — open tasks feed it; the export job belongs to doc 3.
+- The vendor export file — it belongs to the directory accuracy service (`platform/directory-accuracy/directory-accuracy.md`). *(Amended 2026-09-09, pointer + D2-38: the retired doc 3 owned it, and open tasks no longer feed it — the vendor population is selected by a tenant-configured query, not by attestation-window entry.)*
 
-**Neighbors:** Portal lane (doc 2) shows open tasks and receives the email deep links; SFTP Exchange (doc 3) exports open-task practitioners; Backend (doc 5) hosts the endpoints and the submission flow; Database (doc 6) owns the final DDL.
+**Neighbors:** Portal lane (doc 2) shows open tasks and receives the email deep links; Backend (doc 5) hosts the endpoints and the submission flow; Database (doc 6) owns the final DDL. *(Amended 2026-09-09, D2-38: the former neighbour "SFTP Exchange (doc 3) exports open-task practitioners" is gone — docs 3/4 left the series and the directory accuracy service selects its own population, so it is no longer a neighbour of this module.)*
 
 ## Section triage
 
@@ -736,7 +736,7 @@ Key-by-key rules:
 - **`cyclePaused`** — the per-tenant kill switch: pauses new scans, no deployment.
 - *(Removed 2026-08-29: `lookbackDays` — obsolete; unopened obligations wait in `SCHEDULED`, so there is no rear window edge to protect.)*
 - **Infrastructure knobs are deployment configuration, not tenant config:** relay sweep cadence and grace age, and the outcome subscription's retention (≥ 7 days) and dead-letter attempts live with the module service's deployment (doc 5). The command topic's retention and dead-lettering belong to the Smart Outreach Service. Sender identity and branding for the emails are the tenant's `outreach-config` entry, owned by that service's design.
-- **The entry is extensible:** these are the keys this module needs. Each later module doc adds its own keys to the same entry (doc 2: portal mode + field editability; doc 3: per-vendor export cadence and pause) and lists them in its Contracts section; doc 5 (the backend, which reads the config) owns the complete consolidated JSON schema.
+- **The entry is extensible:** these are the keys this module needs. Each later module doc adds its own keys to the same entry (doc 2: portal mode + field editability; the per-vendor export cadence and pause keys moved to the directory accuracy service's own configuration with D2-38 — amended 2026-09-09) and lists them in its Contracts section; doc 5 (the backend, which reads the config) owns the complete consolidated JSON schema.
 
 ## Data model and migration
 

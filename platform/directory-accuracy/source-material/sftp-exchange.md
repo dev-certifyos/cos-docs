@@ -1,5 +1,7 @@
 # Design: SFTP exchange — outbound export + inbound delivery transport
 
+> **RETIRED DRAFT — not a live design document.** This was doc 3 (SFTP exchange) of the attestation-module series (formerly `attestation-module/modules/03-sftp-exchange/`). The external-vendor program was decoupled from the attestation workflow on 2026-09-08 (source-of-truth v2 decision register entry D2-38, the decoupling decision), and the whole vendor program now has **one** standalone design doc: `platform/directory-accuracy/directory-accuracy.md` (to be written; its companion `directory-accuracy-concepts.md` exists). These drafts were moved here 2026-09-09 as source material for that doc — nothing in them is binding, and the internal "doc N" cross-references below refer to the retired attestation-series numbering.
+
 ## Purpose and scope
 
 This module is the **transport doorway** between CertifyOS and external accuracy vendors (Candor first, any vendor later). It moves files in both directions, records who dropped what, and hands every delivery to the ingestion pipeline (doc 4) with full context. It deliberately contains **no parsing and no business logic**.

@@ -2,7 +2,7 @@
 
 The design and brainstorming home for the Directory Accuracy & Attestations feature (CP-37409).
 
-**Amended 2026-09-08 (D2-38):** the external-vendor program (Candor) is **decoupled from the attestation workflow** — separate population (tenant-configured query, not the attestation window), separate cadence, separate staging and review, own service and own standalone design doc (planned home: `cos-docs/platform/external-source-ingestion/`). This folder now covers the **attestation module only**; the `modules/03-sftp-exchange/` and `modules/04-ingestion/` drafts are retired from the series and kept as source material for the standalone doc. The two programs meet only at Golden-record survivorship.
+**Amended 2026-09-08 (D2-38):** the external-vendor program (Candor) is **decoupled from the attestation workflow** — separate population (tenant-configured query, not the attestation window), separate cadence, separate staging and review, own service and own standalone design doc (home: `cos-docs/platform/directory-accuracy/` — companion `directory-accuracy-concepts.md` created 2026-09-09, design doc to follow). This folder now covers the **attestation module only**; the former `modules/03-sftp-exchange/` and `modules/04-ingestion/` drafts were retired from the series and **moved out on 2026-09-09** to `cos-docs/platform/directory-accuracy/source-material/`, where they serve as source material for the single standalone doc. The two programs meet only at Golden-record survivorship.
 
 ## Where things live
 
@@ -23,8 +23,7 @@ attestation-module/
 └── modules/                      ← one folder per module doc, numbered in workflow order
     ├── 01-cycle/                 ← backfill, scheduler, task creation, outreach trigger
     ├── 02-portal-lane/           ← attestation task APIs (portal + non-PDM consumers)
-    ├── 03-sftp-exchange/         ← RETIRED 2026-09-08 (D2-38) — source material for the standalone external-source-ingestion doc
-    ├── 04-ingestion/             ← RETIRED 2026-09-08 (D2-38) — source material for the standalone external-source-ingestion doc
+    │                             (03/04 retired 2026-09-08 and moved 2026-09-09 → platform/directory-accuracy/source-material/; numbering 05–08 unchanged)
     ├── 05-backend/               ← (to write) the workflow owner
     ├── 06-database-data-layer/   ← (to write) store + single gateway
     ├── 07-ui/                    ← (to write) reviewer queue and actions
@@ -38,4 +37,4 @@ attestation-module/
 
 ## Status
 
-Authoritative checklist: `instructions.md` §9. Snapshot: 01–02 finalized and approved; 03–04 retired (D2-38); 05–08 to write; standalone external-source-ingestion doc (Candor program) to write.
+Authoritative checklist: `instructions.md` §9. Snapshot: 01–02 finalized and approved; 03–04 retired (D2-38) and moved out of this folder 2026-09-09 (now `platform/directory-accuracy/source-material/`); 05–08 to write; the single standalone directory accuracy doc (Candor program) to write.

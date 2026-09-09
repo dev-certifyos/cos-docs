@@ -569,7 +569,7 @@ First module document. Inputs: SoT v2 + the instruction file. Exports:
 - Cloud Tasks refuses a duplicate task name at creation — Pub/Sub has no equivalent; it is at-least-once, so duplicates always reach the handler.
 - Point-to-point work, not an event broadcast; per-task retry state and pacing come free.
 - The DLQ would hold chunks whose obligations are still `SCHEDULED` — exactly what the next scan re-finds by itself.
-- Rule of thumb: Pub/Sub for events you cannot regenerate (doc 4's vendor uploads, with a real DLQ); Cloud Tasks for work you can re-derive.
+- Rule of thumb: Pub/Sub for events you cannot regenerate (the directory accuracy service's vendor uploads, with a real DLQ — formerly doc 4); Cloud Tasks for work you can re-derive.
 
 **"Why not store the dates in the OV `data` JSON, or write them through the practitioner update endpoints?"**
 
