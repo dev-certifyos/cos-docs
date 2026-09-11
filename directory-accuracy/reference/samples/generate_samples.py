@@ -36,7 +36,7 @@ N = [npi(x) for x in ["123456789", "234567891", "345678912", "456789123", "56789
 # ------------------------------------------------------------------ export (certify-export-v1)
 EXPORT_COLS = [
     "schema_version", "export_batch_id", "export_generated_at", "tenant_id", "entity_type",
-    "certify_practitioner_id", "npi", "attestation_due_date",
+    "certify_practitioner_id", "npi",
     "name_prefix", "first_name", "middle_name", "last_name", "name_suffix", "group_affiliation",
     "certify_location_id", "location_name", "address_type",
     "address_line1", "address_line2", "city", "state", "zip",
@@ -44,13 +44,12 @@ EXPORT_COLS = [
     "languages", "telehealth_available", "telehealth_url", "ada_accommodations",
 ]
 SV, B, GEN, T, ET = "certify-export-v1", "org-xyz-candor-2026-09-001", "2026-09-01T06:00:00Z", "org-xyz", "PRACTITIONER"
-DUE = "2026-09-30"
 
 
 def x(cid, n, name, groups, lid, lname, addr, lphone, pphone, web, spec, anp, langs, tele, teleurl, ada):
     prefix, first, middle, last, suffix = name
     a1, a2, city, st, zc = addr
-    return [SV, B, GEN, T, ET, cid, n, DUE, prefix, first, middle, last, suffix, groups,
+    return [SV, B, GEN, T, ET, cid, n, prefix, first, middle, last, suffix, groups,
             lid, lname, "PRACTICE", a1, a2, city, st, zc, lphone, pphone, web, spec, anp, langs, tele, teleurl, ada]
 
 
@@ -185,8 +184,6 @@ def write_manifest(data_path: pathlib.Path):
         "candorBatchId": CB,
         "rowCount": row_count,
         "sha256": hashlib.sha256(data).hexdigest(),
-        "producedAt": "2026-09-15T09:30:00Z",
-        "contact": "ops@candorhealth.example",
     }
     out = data_path.with_name(data_path.name + ".manifest.json")
     out.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")

@@ -176,7 +176,7 @@ Vocabulary first, deep-dive material second. Concepts entries carry no design de
 ### Prefill / the mandated field set
 
 - Prefill: the current Golden-record values shown to the attester so they confirm or correct real data instead of typing from memory.
-- The field set is fixed by the product spec (S2 §1.5.9): name, group affiliation, addresses, phones, website, specialty, accepting-new-patients, cultural/linguistic capabilities, disability accommodations, telehealth, NPI (display-only). Fax and office hours excluded (D2-25).
+- The field set is final (v2 D2-39, 2026-09-11). Practitioner block: name (prefix, first, last, suffix), NPI (display-only), languages, cultural competency, primary email, hospital affiliations (name, type), telehealth availability, area of focus, specialties, practitioner role. Practice-location block, one per `group_practitioner_locations` row: group (NPI, name, TIN), website, phone, fax, service address, accepting new patients, handicap accessible. Office hours excluded (D2-25); fax included.
 
 ### snapshot_version
 
@@ -491,7 +491,7 @@ Exports to later docs:
 
 **"Why can't the portal just read the OV like it reads everything else?"**
 
-- Its job here is "show what needs attesting" — a task list plus eleven mandated fields. The DAL read surface is the whole practitioner record with no task concept.
+- Its job here is "show what needs attesting" — a task list plus the confirmed attestation field set. The DAL read surface is the whole practitioner record with no task concept.
 - The staleness guard needs the submission-accepting server to have issued the version at prefill time; split read/write makes the guard span systems that share no state.
 - Least-privilege is the default for a surface reachable from a public attest flow.
 
@@ -577,7 +577,7 @@ Exports to later docs:
 
 **"Why is a NO_CHANGE submission still reviewer-visible?"**
 
-- D2-09: task SUBMITTED ≠ workflow complete. The reviewer may hold vendor recommendations for the same practitioner; "the provider says nothing changed" is evidence they weigh against those, not a reason to skip review.
+- D2-09: task SUBMITTED ≠ workflow complete. "The provider says nothing changed" is a record the reviewer acknowledges, not a reason to skip review.
 
 **"What happens if provider-portal-api itself is compromised?"**
 

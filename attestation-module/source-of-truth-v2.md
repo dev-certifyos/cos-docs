@@ -298,11 +298,11 @@ Outreach is handled by the **Smart Outreach Service** — a new standalone, doma
 5. A payer reviewer works the staged rows: **approve / reject / skip** per row. Rejections feed the rejected-recommendations memory (§6.6).
 6. **Sync Latest** releases the approved rows to Golden-record processing under the program's own source (`candor:{tenantId}`, D2-37). That is the entire workflow — nothing feeds back into attestation.
 
-**Service boundary:** the program is designed as its own directory accuracy service with a **single** standalone design document, `cos-docs/platform/directory-accuracy/directory-accuracy.md` (to be written; its concepts companion exists since 2026-09-09). It replaces the former SFTP-exchange and ingestion module docs of the attestation series, whose drafts were moved out of that series on 2026-09-09 to `cos-docs/platform/directory-accuracy/source-material/` and are now non-binding source material. Where its review surface lives (inside the Attestation Module UI application or its own) and whether it reuses the attestation module's Sync Latest machinery are open decisions (O-19).
+**Service boundary:** the program is designed as its own directory accuracy service, documented outside this series under `cos-docs/directory-accuracy/` as two module design docs in workflow order — vendor export, then vendor ingestion — with their own `instructions.md`. That documentation replaces the former SFTP-exchange and ingestion module docs of the attestation series (retired 2026-09-08; the drafts were discarded 2026-09-11 — the standalone doc is written fresh). Its review surface is settled: the PDM reviewer UI (the same front-end application that hosts the Attestation Module UI) consumes the service's review APIs; the service ships no UI (CP-39602, 2026-09-09). Whether it reuses the attestation module's Sync Latest machinery remains open (O-19).
 
 ### 6.4 Inbound delivery: file + manifest (manifest last)
 
-> *Amended 2026-09-08 (D2-38): §6.4–§6.6 describe the vendor program's ingestion — they belong to the standalone directory accuracy service, not to the attestation module. The mechanics below still hold for that service, and are the requirement input to `platform/directory-accuracy/directory-accuracy.md`. Amended 2026-09-09: the two retired drafts that detailed these mechanics (SFTP exchange, ingestion) now live at `platform/directory-accuracy/source-material/` — non-binding source material, not design docs.*
+> *Amended 2026-09-08 (D2-38): §6.4–§6.6 describe the vendor program's ingestion — they belong to the standalone directory accuracy service, not to the attestation module. The mechanics below still hold for that service, and are the requirement input to the vendor ingestion module doc under `cos-docs/directory-accuracy/`.*
 
 1. The vendor processes the export and uploads its **recommendations file** to the **`to/<tenant>/` folder** (renamed from `inbound/` 2026-09-08), followed by a **manifest** uploaded **last**.
 2. The manifest contains at minimum: the vendor's batch id, the referenced CertifyOS export batch id, the data file's SHA checksum, row counts, and a produced-at timestamp.
@@ -342,124 +342,79 @@ Upload events from the SFTP/storage layer **can be duplicated, delayed, lost, or
 ### 6.7 Portal lane: prefill, guards, and the delta
 
 1. Practitioner or provider admin logs in to the existing **Portal UI**. Identity and eligible practitioner relationships are resolved server-side — a practitioner sees only their own form; a provider admin sees the practitioners they manage.
-2. The form is **prefilled** from the current Golden record snapshot. **The exact field set is already decided** (Product Spec S2 §1.5.9 — this is the mandated list, not a proposal):
-   - Provider name
-   - Group affiliation
-   - Street address(es)
-   - Telephone number(s)
-   - Website URL
-   - Specialty
-   - Accepting-new-patients status
-   - Cultural and linguistic capabilities
-   - Disability accommodations
-   - Telehealth availability
-   - NPI — **display-only**, never editable
-   Fax and office hours are explicitly **excluded** from the MVP form (D2-25). What remains open is only the *technical mapping* of each field to its Golden-record path, agreed with Product before the API contract freezes.
+2. The form is **prefilled** from the current Golden record and the practitioner's tenant link rows. **The field set is final** (confirmed 2026-09-11, D2-39; field-by-field source in §6.7.1). Two blocks:
+   - Practitioner block, once per practitioner: name (prefix, first, last, suffix), NPI (**display-only**, never editable), languages, cultural competency, primary email, hospital affiliations (name, type), telehealth availability, area of focus, specialties, practitioner role.
+   - Practice-location block, once per practitioner-at-location row: group (NPI, name, TIN), website, phone, fax, service address (line 1, line 2, city, state, zip), accepting new patients, handicap accessible.
+   - Office hours stay out of the form (D2-25). Fax is in (D2-25 amended 2026-09-11).
 3. The user confirms, edits, or flags fields, then attests. On submit, the Portal sends **the delta plus metadata** — attestation timestamp, what changed, what is new, what was removed, attester identity/type — to the Attestation Module Backend, which stores it in the Attestation Module database. NPI is display-only.
 4. **Staleness guard.** The Portal is not real-time: if the Golden record changed during the minutes the form was open, submitting would attest a stale snapshot. The submission carries the snapshot version; if it no longer matches, the submission is not accepted silently — the UX tells the user "the data has been updated since you opened this form," refreshes, and lets them attest the latest data.
 5. **Already attested.** If another eligible actor (e.g., the provider admin) already attested this practitioner's current task, a second submitter sees "already attested by [Name] on [Date]" instead of double-attesting.
 6. **No-change attestation.** If the user attests without any edits, the outcome is recorded as **NO_CHANGE** and there is no provider-data mutation — but the attestation record **still goes to the holding area and is visible to the payer reviewer**, so the reviewer can acknowledge that the provider confirmed everything as-is on [date] and the workflow record is complete. *(The earlier side-by-side rationale — weighing it against a pending vendor recommendation — is superseded by the vendor decoupling, D2-38; the visibility itself stands.)*
 7. **Attester completion ≠ workflow completion.** Submission — with or without changes — completes only the **attester's** job: the task moves to **SUBMITTED** (the practitioner/admin has done their part; the attestation clock advances from the submission timestamp — submission-anchored, confirmed by Product 2026-09-01, closing O-11; outreach stops). The **attestation workflow** for that practitioner is complete only when review concludes: every staged item from the submission decided, approved items synced, and a NO_CHANGE record acknowledged by the reviewer. The two statuses are tracked separately — a task's SUBMITTED state must never be read (or reported) as "the whole attestation workflow is finished." (Decided: the reviewer **acknowledges/approves** a NO_CHANGE record — no mutation results; a vendor recommendation for the same practitioner is decided independently on its own row.)
 
-#### 6.7.1 The prefill field set — what the Portal GET returns, and nothing more
+#### 6.7.1 The attestation field set — final
 
-**Why this is pinned here.** The Portal's task-fetch endpoint should return the attestable subset, not the whole practitioner record. Three reasons: a smaller payload is a smaller PHI surface on a provider-facing channel; the staleness guard hashes exactly what was displayed, so the displayed set has to be a closed, versioned list (§6.7 item 4); and every field returned is a field the provider can dispute, which becomes reviewer work.
+Confirmed 2026-09-11 (D2-39). One list for the Portal prefill, the submission, the staged items, and the Candor export. Sources verified against the entity schemas, the DAL Liquibase changesets, the roster system-field mapping (`roster-system-fields.json`) and the practitioner relationships endpoint (`GET /practitioners/{id}/relationships/all`).
 
-**Provenance.** The authoritative list is **S2 §1.5.9**, verbatim: *"Mandated field set for attestation: provider name, group affiliation, street address(es), telephone number(s), website URL, specialty, accepting-new-patients, cultural/linguistic capabilities, disability accommodations, telehealth availability, and NPI (functionally required though not statutory)."* S2 §1.3.3 and S5 §5 (Section B) describe the same set only by category — "demographics, practice locations, contact information, network-related fields" — and name no fields, so they add grouping, not content. S5's PRD carries the payload envelope (§7) but no field list.
+**Practitioner block** — one per practitioner. Anchor: `core_practitioners_ov`, `tenant_id` = tenant, `contributing_crosswalks` contains the task's `certify_practitioner_id`.
 
-**What is deliberately *not* in it.** S1 §2 lists the **reviewer's** attribute tabs as Specialty, Accepting Patients, Address, Phone, **Fax**, and **Office Hours**. Fax and office hours are reviewer/vendor-verified attributes, not mandated attestation fields — which is what D2-25 records. Do not read S1 §2 as a Portal form spec; it describes the payer-side surface.
+- prefix
+  - `core_practitioners_ov`: `prefix`
+- firstName
+  - `core_practitioners_ov`: `firstName`
+- lastName
+  - `core_practitioners_ov`: `lastName`
+- suffix
+  - `core_practitioners_ov`: `suffix`
+- npi (display-only)
+  - `core_practitioners_ov`: `npi`
+- languages
+  - `core_practitioners_ov`: `languages[]` — entry `{ language, isPrimary }`
+- culturalCompetency
+  - `core_practitioners_ov`: `culturalCompetency`
+- primaryEmail
+  - `core_practitioners_ov`: `primaryEmail`
+- hospitalAffiliations (name, type)
+  - `core_practitioners_ov`: `hospitalAffiliations[]` — entry `{ name, type }`
+- telemedicineAvailable
+  - `core_practitioners_ov`: `telemedicineAvailable`
+- practitionerSpecializedTraining (area of focus)
+  - `core_practitioners_ov`: `practitionerSpecializedTraining[]`
+- specialties
+  - `tenant_practitioner_specialty` rows: `tenant_practitioner_id` = `tenant_practitioners.id`, where `tenant_practitioners.certify_practitioner_id` IN `core_practitioners_ov.contributing_crosswalks`
+  - name: `tenant_practitioner_specialty.tenant_specialty_id` → `tenant_specialty.data.displayName`
+- practitionerRoles
+  - `core_practitioners_ov`: `practitionerRoles[]` — values `PCP`, `Specialist`, `Hospitalist`, `Hospital-based Provider`
+  - `practitionerRolesMap` holds only effective/termination dates per role; not displayed
 
-**Field set, mapped to where the data actually lives.** Verified against the entity schemas (`schemas/entities/*.schema.json`) and the DAL Liquibase tables on 2026-09-01. Reading the table: entity fields live in each named table's `data` JSON; `*_ov` tables are the golden merged rows. The practitioner→location join chain (implemented in production, `PractitionerLocationLookupRepository`): `core_practitioners_ov` → `tenant_practitioners` → `tenant_group_practitioners` → `group_practitioner_locations` → `tenant_group_locations` → `group_locations` → `core_locations_ov`.
+**Practice-location block** — one per `group_practitioner_locations` row. Row reached: `tenant_group_practitioners.tenant_practitioner_id` = `tenant_practitioners.id` → `group_practitioner_locations.tenant_group_practitioner_id` = `tenant_group_practitioners.id`. The row `id` is the block's `entryKey`.
 
-| # | Mandated field (S2 §1.5.9) | Where it lives today (entity field → physical table) | Editable in the Portal? |
-| --- | --- | --- | --- |
-| 1 | Provider name | `Practitioner.prefix/firstName/middleName/lastName/suffix` → `core_practitioners_ov` | Per tenant config. Note: name is in S2 §2.2.1's default *critical* set |
-| 2 | Group affiliation | The practitioner↔group link row itself: `tenant_group_practitioners` (`tenant_group_id` → `tenant_groups`, `tenant_practitioner_id` → `tenant_practitioners`) | Per tenant config; also a default critical field |
-| 3 | Street address(es) | `EntityAddress.addressLine1/2/city/state/zip` → `core_entity_addresses_ov`, linked to the location by `location_entity_addresses` (`location_id`, `entity_address_id`, `addressType`); the location is reached via `group_practitioner_locations` → `tenant_group_locations` → `group_locations`; `Practitioner.addresses[]` and `Practitioner.practiceLocations[]` also exist on `core_practitioners_ov` (re-verified 2026-09-01: `Location` itself carries no street fields) | Per tenant config — list attribute, so add/remove, not only edit |
-| 4 | Telephone number(s) | `Location.phone/appointmentPhone/afterHoursPhone/callCoveragePhone` → `core_locations_ov` (location reached via `group_practitioner_locations` → `tenant_group_locations` → `group_locations`); `TenantGroupLocationPractitionerNetwork.appointmentPhone` → `tenant_group_location_practitioner_networks`; `Practitioner.phoneNumbers[]` → `core_practitioners_ov` | Per tenant config — **which phone is "the" directory phone must be decided** |
-| 5 | Website URL | `Location.website` → `core_locations_ov` (location reached via `group_practitioner_locations` → `tenant_group_locations` → `group_locations`) | Per tenant config |
-| 6 | Specialty | `Practitioner.specialties[]/specialty/cmsSpecialties` → `core_practitioners_ov`; tenant-level link `tenant_practitioner_specialty`; also `Location.locationPrimarySpecialty/locationHsdSpecialty` → `core_locations_ov` | Per tenant config |
-| 7 | Accepting new patients | **Three homes:** `Location.acceptsNewPatients` → `core_locations_ov`; `TenantGroupPractitionerLocation.acceptingNewPatients` → `group_practitioner_locations`; `TenantGroupLocationPractitionerNetwork.acceptingNewPatients` → `tenant_group_location_practitioner_networks` | Per tenant config — see finding F-2 |
-| 8 | Cultural / linguistic capabilities | `Practitioner.languages[]/culturalCompetency/language` → `core_practitioners_ov`; `Location.languagesSpokenAtLocation` (single string) → `core_locations_ov`; `TenantGroupLocationPractitionerNetwork.languageSpoken[]` → `tenant_group_location_practitioner_networks` | Per tenant config — multi-homed |
-| 9 | Disability accommodations | `Location.adaCompliance` (structured object; broader `Location.accessibility` also exists) → `core_locations_ov` | Per tenant config |
-| 10 | Telehealth availability | `Practitioner.telemedicineAvailable` (string) and `Practitioner.telemedicineURL` → `core_practitioners_ov` — practitioner-level only; **no location- or network-level field** (re-verified 2026-09-01) — see finding F-1 | Per tenant config — level decision pending (F-1) |
-| 11 | NPI | `Practitioner.npi` → `core_practitioners_ov` | **Never** — display-only, protected identity field (S2 §1.3.9, D2-19) |
+- group (npi, name, tin)
+  - `core_groups_ov`: `npi`, `name`, `tin`
+  - join: `tenant_group_practitioners.tenant_group_id` = `tenant_groups.id` → `tenant_groups.group_id` = `core_groups_ov.certify_group_id`
+- website
+  - `group_practitioner_locations`: `data.groupPracticeLocationWebsite`
+- phone
+  - `group_practitioner_locations`: `data.phone`
+- fax
+  - `group_practitioner_locations`: `data.fax`
+- service address (addressLine1, addressLine2, city, state, zip)
+  - `core_entity_addresses_ov`: `addressLine1`, `addressLine2`, `city`, `state`, `zip`
+  - join: `group_practitioner_locations.tenant_group_location_id` = `tenant_group_locations.id` → `tenant_group_locations.group_location_id` = `group_locations.id` → `location_entity_addresses.location_id` = `group_locations.location_id` with `data.addressType` = `service` → `location_entity_addresses.entity_address_id` IN `core_entity_addresses_ov.contributing_crosswalks`
+- acceptingNewPatients
+  - `group_practitioner_locations`: `data.acceptingNewPatients` — values `Accepting New`, `Closed`, `Existing Patients Only`, `Telemedicine`, `Urgent Care Only`
+  - evidence: roster `acceptsNewPatients` writes this key on `GroupPractitionerLocation`; the relationships endpoint reads the network row first and falls back to this row
+- handicapAccessible
+  - `core_locations_ov`: `data.handicapAccessible` — the roster writes it here (`locationHandicapAccessible` → `CoreLocation.handicapAccessible`)
+  - join: `group_locations.location_id` IN `core_locations_ov.contributing_crosswalks`
+  - `group_practitioner_locations.data.handicapAccessible` exists in the schema but nothing writes it
 
-**Three findings from the mapping, each needing a decision before the GET contract is fixed** *(Product answered 2026-09-08 — resulting field map in §6.7.2; ratification pending)*:
+**Response envelope**, beside the fields (S2 §1.5.1, §1.3.1–1.3.8, D2-19):
 
-- **F-1 (corrected 2026-09-01) — Telehealth availability exists only at the practitioner level.** `Practitioner.telemedicineAvailable` (a string) and `Practitioner.telemedicineURL` exist; there is **no location- or network-level telehealth field** (the earlier "no field exists" claim searched "telehealth" — the schema term is "telemedicine"; `telehealthNoShow` on `Contracts` remains unrelated). Decision needed: is practitioner-level "offers telemedicine" the attested fact, or does the directory need "offers telehealth at this location / under this network" — which would require a new field on the practitioner↔location↔network relationship, alongside `acceptingNewPatients`?
-- **F-2 (precision corrected 2026-09-01) — Several attributes live at more than one level, and the prefill must name one level per attribute.** Accepting-new-patients exists in **three** places — the location (`Location.acceptsNewPatients`), the practitioner↔location join (`TenantGroupPractitionerLocation.acceptingNewPatients`), and the practitioner↔location↔network join (`TenantGroupLocationPractitionerNetwork.acceptingNewPatients`). Office hours and languages exist in **two** — the location (`Location.officeHours`, `Location.languagesSpokenAtLocation` — a single string) and the network join (`…officeHours`, `…languageSpoken[]`); the practitioner↔location join carries neither, and languages additionally exist at the practitioner level (`Practitioner.languages[]`). These are genuinely different facts ("this office takes new patients" vs. "this doctor takes new patients here" vs. "this doctor takes new patients here, under this network"), and the provider is attesting to the most specific one. The prefill must name **one** level per attribute, and the delta must carry the same composite key the survivorship engine groups on, or the released change and the merged result will disagree (verified against the survivorship engine's hardcoded `ARRAY_FIELD_GROUPING_KEYS`).
-- **F-3 — The attestable set is not one entity.** It spans `Practitioner`, `Location`, `EntityAddress`, `TenantGroupPractitionerLocation`, `TenantGroupLocationPractitionerNetwork`, and the group relationship. So the GET is a composed, tenant-scoped read across joins — not a projection of one row — and each returned item needs its own stable item identity so an edit can be routed back to the right row on submit. The join chain is already implemented in production (`PractitionerLocationLookupRepository`, verified 2026-09-01): `core_practitioners_ov` → `tenant_practitioners` → `tenant_group_practitioners` → `group_practitioner_locations` → `tenant_group_locations` → `group_locations` → `core_locations_ov`, with street addresses via `location_entity_addresses` → `core_entity_addresses_ov`, and the per-network layer on `tenant_group_location_practitioner_networks` (keyed by `group_practitioner_location_id`).
-
-**Also worth returning, and worth naming as directory-relevant even though it is not in the mandated list:** `TenantGroupLocationPractitionerNetwork.includePractitionerLocationInNetworkDirectory`. It decides whether the practitioner-at-location appears in the directory at all, which makes it the most directory-consequential flag in the model. Whether the provider may attest to it, or only see it, is a Product question.
-
-**The rest of the response envelope.** Beyond the attestable data, the GET must also return, per S2 §1.5.1 and §1.3.1–1.3.8 and D2-19:
-
-- Task context: task id, the deterministic identity, due date, status, last-attested date.
-- Tenant configuration: whether edit is enabled, whether flag is enabled, and the attestation policy (provider only / admin only / either).
-- Attester context: who the user is attesting as, and their type — used to render "You are attesting as [Name] ([Practitioner/Admin])".
-- `snapshot_version` — a **content hash of the canonicalized displayed field values**, not the OV row's `updated_at`. Survivorship rewrites `updated_at` on every pipeline run even when nothing changed, and array ordering is not deterministic, so a timestamp token would falsely reject submissions whose displayed data never moved.
-
-**What the GET must not return:** anything outside the table above and this envelope. Explicitly excluded from the provider-facing payload: SSN, date of birth, sanctions and sanction lineage, disclosure questions, malpractice details, NPDB identifiers, credentialing dates and status, supporting documents, work-history gaps, and every internal identifier not needed to route an edit. These are on the practitioner record; none of them are attestation data, and several are material PHI/PII exposure on a provider-facing channel.
-
-**Fax and office hours** stay out of the MVP Portal form (D2-25). Adding them later is a form and configuration change, not a schema change — the fields already exist (`Location.fax`, `Location.providerFax`, `Location.officeHours`, `TenantGroupLocationPractitionerNetwork.officeHours`).
-
-#### 6.7.2 Portal field map — Product answers of 2026-09-08 (pending ratification)
-
-Product (Madhunika Sivasankar) answered the §6.7.1 field-mapping question on 2026-09-08. This section records the resulting per-field source map: the exact field the Portal shows, the table and column it is read from, and how the practitioner reaches that row. Status column marks what Product confirmed and what is still open; open items are also listed in §9.1. Nothing here is a decision until ratified (D2-xx to be added). Analysis of the answers: `reference/product-clarifications-2026-09-08.md`.
-
-**Linkage — how a practitioner reaches its locations.** From `PractitionerLocationLookupRepository.CHAIN_QUERY` (core-data-access-layer), verified 2026-09-08. Every hop is tenant-scoped. OV tables have no foreign key: the link table's crosswalk id must be contained in the OV row's `contributing_crosswalks` array.
-
-| Hop | Table | Join | Gives |
-|---|---|---|---|
-| 1 | `core_practitioners_ov` | `tenant_id` = tenant; `contributing_crosswalks` contains the tenant's `certify_practitioner_id` | practitioner Golden record |
-| 2 | `tenant_practitioners` | `certify_practitioner_id` IN `core_practitioners_ov.contributing_crosswalks` | `id` |
-| 3 | `tenant_group_practitioners` | `tenant_practitioner_id` = `tenant_practitioners.id`; `tenant_group_id` = `tenant_groups.id` | the group-affiliation row |
-| 4 | `group_practitioner_locations` | `tenant_group_practitioner_id` = `tenant_group_practitioners.id` | one row per practitioner-at-location; `data.acceptingNewPatients` |
-| 5 | `tenant_group_locations` | `id` = `group_practitioner_locations.tenant_group_location_id` | `group_location_id` |
-| 6 | `group_locations` | `id` = `tenant_group_locations.group_location_id` | `location_id` |
-| 7 | `core_locations_ov` | `group_locations.location_id` IN `core_locations_ov.contributing_crosswalks` | location Golden record |
-| 8 | `location_entity_addresses` | `location_id` = `group_locations.location_id` | `entity_address_id`; `data.addressType` |
-| 9 | `core_entity_addresses_ov` | `location_entity_addresses.entity_address_id` IN `core_entity_addresses_ov.contributing_crosswalks` | address Golden record |
-
-**Practitioner-level fields — one value set per practitioner per tenant.**
-
-| Portal field | Read from | Status (2026-09-08) |
-|---|---|---|
-| Name (prefix, first, middle, last, suffix) | `core_practitioners_ov`: `prefix`, `firstName`, `middleName`, `lastName`, `suffix` | Confirmed |
-| NPI | `core_practitioners_ov`: `npi` | Confirmed; display-only, never editable (D2-19) |
-| Practitioner phone number(s) | `core_practitioners_ov`: `phoneNumbers[]` | Confirmed. Half of Product's "telephone number"; the other half is the location phone below |
-| Specialty(ies) | `tenant_practitioner_specialty` (`tenant_practitioner_id` = `tenant_practitioners.id`); name via `tenant_specialty_id` → `tenant_specialties` | Confirmed. Not `Practitioner.specialties[]`, not location specialties. Release path writes a tenant link row, not the Golden record |
-| Languages spoken | `core_practitioners_ov`: `languages[]` | Confirmed |
-| Cultural competency | `core_practitioners_ov`: `culturalCompetency` | Same Product answer; confirm whether shown as its own field |
-| Telehealth offered | `core_practitioners_ov`: `telemedicineAvailable` | Confirmed (F-1) |
-| Telehealth URL | `core_practitioners_ov`: `telemedicineURL` | Confirmed (F-1) |
-| Group affiliation(s) | `tenant_group_practitioners` rows for the practitioner; display name via `tenant_group_id` → `tenant_groups` → group record | Confirmed. Tied to the open provider-admin scope question (D2-17 reopened by Product 2026-09-08) |
-
-**Location-level fields — repeated once per `group_practitioner_locations` row; each block is one practice location.**
-
-| Portal field | Read from | Linkage | Status (2026-09-08) |
-|---|---|---|---|
-| Location name (block header, not attested) | `core_locations_ov`: `locationName` | hop 7 | Label only |
-| Practice address (line 1, line 2, city, state, zip) | `core_entity_addresses_ov`: `addressLine1`, `addressLine2`, `city`, `state`, `zip` | hops 8–9, filtered to the practice address type | Level confirmed: practice only; mailing/billing excluded. **Open:** `AddressType` enum has no `practice` value (`billing`, `mailing`, `MRStorageAddress`, `office`, `service`, `w9Address`); `office` assumed |
-| Practice location phone | `core_locations_ov`: `phone` | hop 7 | Level confirmed: location phone, network-agnostic. **Open:** also `appointmentPhone`, `afterHoursPhone`, `callCoveragePhone`? Other half of Product's "telephone number" |
-| Practice website | `core_locations_ov`: `website` | hop 7 | **Open:** Product may move website to practitioner level (no such field today); location level assumed for MVP |
-| Accepting new patients at this location | `group_practitioner_locations`: `data.acceptingNewPatients` | hop 4 (the row itself) | Level confirmed per Product's #7 answer (doctor at this location). **Open:** confirm it is not `core_locations_ov.acceptsNewPatients` (office as a whole); F-2 wording could mean either. Network level excluded for MVP |
-| Disability / ADA accommodations | `core_locations_ov`: `adaCompliance` (structured object) | hop 7 | Confirmed; sub-attribute rendering is an engineering decision |
-
-**Excluded from the form.**
-
-| Item | Why |
-|---|---|
-| Office hours, fax | D2-25; confirm Product's F-2 mention of office hours does not reopen it |
-| Everything on `tenant_group_location_practitioner_networks` (`acceptingNewPatients`, `appointmentPhone`, `languageSpoken[]`, `officeHours`) | Product: network participation out of scope for MVP |
-| `includePractitionerLocationInNetworkDirectory` | Product: not attested; it defines who gets an attestation at all (population rule → doc 1) |
-| Mailing, billing and other non-practice address types | Product: practice address only |
-| `core_practitioners_ov.addresses[]` | Superseded by practice-location addresses |
-| `core_practitioners_ov.specialties[]`, `specialty`, `cmsSpecialties`; `core_locations_ov.locationPrimarySpecialty`, `locationHsdSpecialty` | Product: tenant practitioner specialty is the attested one |
-| `core_locations_ov.languagesSpokenAtLocation` | Product: languages at practitioner level |
-
-**Still pending Product:** location phone columns · website level · accepting-new-patients table · practice address type value · office-hours exclusion · cultural competency display.
+- Task context: task id, identity, next attestation date, status, last-attested date.
+- Tenant configuration: form mode (confirm / edit / flag), per-field editability, attester policy.
+- Attester context: who is attesting and their type.
+- `snapshot_version`: content hash of the canonicalized displayed values, not the OV `updated_at`.
 
 ### 6.8 Staging, sources registry, and per-program identity
 
@@ -537,7 +492,7 @@ All decisions remain subject to formal five-team/Product/Compliance sign-off. **
 | D2-22 | Effective date = evidence/verification date when present, else end-of-month; configurable | ✅ (WD-13) | Unchanged. |
 | D2-23 | T+1 is the final automated email; tasks stay open and submittable | ✅ (WD-14, WD-15) | OVERDUE (due + 1 day) is the final automated email; overdue **tasks** remain open and submittable indefinitely. *(The v1-era "expired links block" wording is superseded by D2-35: emailed links are tokenless and never expire — link expiry would exist only if the portal team later layers magic-link tokens onto the same entry route.)* |
 | D2-24 | Rejection reasons mandatory: picklist + free text | ✅ (WD-16) | Unchanged. |
-| D2-25 | Fax and office hours excluded from the MVP Portal form | ✅ (WD-17) | Unchanged. |
+| D2-25 | Office hours excluded from the MVP Portal form; fax included | 🔄 amended 2026-09-11 (was: fax and office hours excluded, WD-17) | The confirmed field set (D2-39) carries the practice location's fax (`group_practitioner_locations.data.fax`). Office hours remain out. |
 | D2-26 | Non-attested report = on-screen + API, no export, canonical task state only | ✅ (WD-18) | Unchanged. |
 | D2-27 | Vendor evidence rendered as a plain copyable string | ✅ (WD-19) | Unchanged. |
 | D2-28 | Clock rules | 🔄 amended 2026-09-01 (Product) | Submission → submission + 90 days — **submission-anchored, confirmed** (closes O-11). **A rejection does not reset the clock**: the submission's +90 successor stands; no separate re-attestation timeline exists after a rejection (the earlier rejection + 30 rule was a v1 working assumption, never spec-sourced — removed). Never-submitted → task stays open, no duplicate task. Product also confirmed a practitioner only ever has **one** upcoming attestation. |
@@ -550,7 +505,8 @@ All decisions remain subject to formal five-team/Product/Compliance sign-off. **
 | D2-35 | **Emailed deep links are tokenless** | 🆕 2026-09-07 | The reminder email carries `<portalBaseUrl (tenant config)>/attest/<taskId>` — a stable entry route the portal stack owns and may redirect behind; no token is minted by the Attestation Module; authentication is the portal's normal login. Magic-link tokens remain an optional portal-side layer that changes nothing in the contract. Details: cycle module doc D17, portal module doc. |
 | D2-36 | **Practitioner termination handling** | 🆕 2026-09-07 | Terminated practitioners are excluded at backfill and seeding; task opening re-checks and skips them; a PDM practitioner-terminated event (dependency — does not exist today, ask to the PDM team) closes their obligations to a terminal **CLOSED** task state and cancels outreach; until the event exists, the weekly reconcile job's `terminated` check is the closer. CLOSED rows are never consumer-visible. Timing/rollback policy questions are with Product (O-16). Details: cycle module doc D18/D19. |
 | D2-37 | **Two sources, one per lane — the shared `attested_data` source is rejected** | 🆕 2026-09-08 (closes O-15) | Released changes enter Golden-record processing under **two tenant-scoped sources**: `portal-attestation:{tenantId}` (portal lane) and `candor:{tenantId}` (external lane; each future vendor gets its own), both ranked above roster/UI per D2-18. The Technical Discovery proposal (S14) of a **single shared `attested_data:{tenantId}` source** for both lanes, always winning survivorship, is **rejected**. Why — the record for anyone asking: **(a) Slice collision — verified data loss.** Slices are one row per `(source_id, crosswalk_id)`, and the DAL's slice `UPSERT` **replaces the entire `data` JSON** (verified 2026-09-08: `CorePractitionerService.mergeModelsForUpdate` is a whole-node swap, `CorePractitionerService.java:90-106`; the Spanner update is `SET data = @data`). Under one shared source, a portal attestation and a vendor recommendation for the same practitioner write the **same row** — the second lane's write erases the first lane's released fields before survivorship even runs. Under two sources each lane owns its own slice and can never overwrite the other. **(b) Per-field mixed review outcomes become unbuildable.** The reviewer decides per field — approve the phone from the provider's attestation and the address from Candor for the same practitioner. That release requires two slices; with one shared slice the two part-payloads overwrite each other (see a). **(c) OV lineage.** S2 §3.5.2 requires OV-side metadata *"distinguishing Candor-sourced vs. attestation-sourced vs. tenant-manual changes."* `contribution_map` records the winner **per field** with its `sourceId`/`sourceType` (verified: `ContributionMapBuilder.java:462-487`) — with two sources the Golden record itself answers "who said this value" field by field; under one shared source every field reads `attested_data:{tenant}` and the distinction is unrepresentable in the OV (workflow-side audit survives, OV-side lineage does not). **(d) The compliance clock.** D2-29 attaches the two-business-day obligation to attestations, not vendor recommendations — underivable if the OV cannot say which lane a value came from. **(e) Ranking.** D2-18's `portal-attestation > candor` needs two things to rank; the shared source forces its ranking to be unconditional. And a single source saves no configuration anyway: an unconfigured source type falls into the Drools unknown bucket at rank **997** (verified: `sourceRankingSurvivorshipRules.drl:90-92`) — better than NPPES (998)/CAQH (999) but **worse than tenant (1) and roster (3)** — so explicit per-tenant ranking entries are mandatory under either design, and sync refuses tenants missing them (D2-18). **(f) The proposal's goal is kept.** Its underlying intent — reviewed data outranks raw roster/UI — is fully met by two sources both ranked above roster. Cost of two sources: one extra `core_sources` row and one extra ranking entry per tenant. **(g) Residual.** `rejected_recommendations` is vendor-lane-only (D2-07); under a shared source that rule would need a separate discriminator column — reintroducing the collapsed distinction somewhere survivorship cannot see it. **Implementation consequence (doc 5, the sync worker):** because slice `UPSERT` replaces the whole `data` JSON, the sync worker must never sparse-write a slice — on every Sync Latest it **rebuilds the complete slice per (source, practitioner) from the module's released-items ledger** and writes it whole (idempotent, removals fall out naturally; the `UPSERT_DATA` merge variant is unusable — its arrays are append-only and can never shrink). |
-| D2-38 | **The external-vendor program (Candor) is decoupled from the attestation workflow** | 🆕 2026-09-08 (Product call) | Candor is **directory accuracy only** — not an attestation input lane. **(a) Populations are independent:** vendor NPIs are selected by a **tenant-configurable query filter** stored in tenant configuration, on a configurable cadence (first of the month for Candor today) — not by attestation-window entry. **(b) No task coupling:** vendor rows never bind to an attestation task, never advance or close a cycle, and are never joined to attestations in a reviewer view. **(c) Own workflow:** export file → vendor response → row-by-row ingestion into the program's own staging → reviewer approve/reject/skip → Sync Latest releases approved rows to the Golden record under `candor:{tenantId}` (D2-37 unchanged — reinforced, since the programs now share nothing upstream of survivorship). **(d) Own service and document:** built as a separate directory accuracy service with one standalone design doc (`platform/directory-accuracy/directory-accuracy.md`), replacing the attestation series' SFTP-exchange and ingestion module docs — *executed 2026-09-09: both drafts moved out of the series to `platform/directory-accuracy/source-material/` as non-binding source material.* Survivorship ranking (D2-18) remains the only arbitration point between the two programs. Supersedes: the "two input lanes" framing (§1, §6 Stage 2), window-entrant export selection (§6.3), shared staging + side-by-side review (§6.8/6.8.1/6.9), and the vendor legs of D2-09/D2-12. Basis for the earlier coupled reading: the product specs placed both lanes in one module, one staging, one queue, one merge (S2 §§1.5.4, 2.1.6, 2.3.1, 3.1.1, 3.4.2; S1 §§2, 5, 8; S14) — decoupling is new direction from the 2026-09-08 call. |
+| D2-38 | **The external-vendor program (Candor) is decoupled from the attestation workflow** | 🆕 2026-09-08 (Product call) | Candor is **directory accuracy only** — not an attestation input lane. **(a) Populations are independent:** vendor NPIs are selected by a **tenant-configurable query filter** stored in tenant configuration, on a configurable cadence (first of the month for Candor today) — not by attestation-window entry. **(b) No task coupling:** vendor rows never bind to an attestation task, never advance or close a cycle, and are never joined to attestations in a reviewer view. **(c) Own workflow:** export file → vendor response → row-by-row ingestion into the program's own staging → reviewer approve/reject/skip → Sync Latest releases approved rows to the Golden record under `candor:{tenantId}` (D2-37 unchanged — reinforced, since the programs now share nothing upstream of survivorship). **(d) Own service and documents:** built as a separate directory accuracy service with its own module design docs under `cos-docs/directory-accuracy/` (vendor export, then vendor ingestion), replacing the attestation series' SFTP-exchange and ingestion module docs (*retired 2026-09-08; drafts discarded 2026-09-11*). **(e) Why a separate service rather than a package inside the attestation backend** (recorded 2026-09-11; this row is the only place the two programs are compared): workload shapes are incompatible — the attestation backend is a small always-on OLTP service with a compliance clock, vendor ingestion is idle most of the month and then burst-parses files approaching a million rows, so one deployable would be sized for the peak all month or risk OOM-killing reviewer traffic; vendor files are untrusted external input and must never degrade the surface practitioners use to meet a regulatory deadline; the vendor adapter is the highest-churn code (three contract shapes in ~3 months — CT-011, C1–C8) and, clubbed, every fix would redeploy the compliance-audited backend; ingestion needs vendor SFTP-bucket credentials the attestation module never holds; million-row staging bursts in `attestation-db` would compete with reviewer OLTP, and co-located tables invite attestation↔candor joins that are semantically wrong under this decision; the stored records are structurally disjoint (task lifecycle + due date + attester + snapshot guard vs per-attribute verification status + reason + confidence tier + evidence); and separating is the reversible choice. The two programs meet in exactly two places: the PDM reviewer UI, which composes both services' APIs on `certify_practitioner_id` (never a database join), and survivorship ranking (D2-18) across the two slice sources (D2-37). Supersedes: the "two input lanes" framing (§1, §6 Stage 2), window-entrant export selection (§6.3), shared staging + side-by-side review (§6.8/6.8.1/6.9), and the vendor legs of D2-09/D2-12. Basis for the earlier coupled reading: the product specs placed both lanes in one module, one staging, one queue, one merge (S2 §§1.5.4, 2.1.6, 2.3.1, 3.1.1, 3.4.2; S1 §§2, 5, 8; S14) — decoupling is new direction from the 2026-09-08 call. |
+| D2-39 | **The attestation field set is final** | 🆕 2026-09-11 (closes O-12, O-13, O-14) | One list for Portal prefill, submission, staged items, and the Candor export. **Practitioner block** (`core_practitioners_ov`): `prefix`, `firstName`, `lastName`, `suffix`, `npi` (display-only), `languages[]`, `culturalCompetency`, `primaryEmail`, `hospitalAffiliations[]` (`name`, `type`), `telemedicineAvailable`, `practitionerSpecializedTraining[]`, `practitionerRoles[]`; specialties from `tenant_practitioner_specialty`. **Practice-location block** (one per `group_practitioner_locations` row): group `npi`/`name`/`tin` from `core_groups_ov`; `groupPracticeLocationWebsite`, `phone`, `fax`, `acceptingNewPatients` from the row; service address from `core_entity_addresses_ov` (`addressType` = `service`); `handicapAccessible` from `core_locations_ov`. Per-field sources: §6.7.1. |
 
 These apply to **every step**, not only ingestion — a stated requirement from the team discussion:
 
@@ -563,7 +519,7 @@ These apply to **every step**, not only ingestion — a stated requirement from 
 
 ## 9. Open items
 
-Everything else raised during review has been decided (2026-08-27, 2026-09-01, and 2026-09-08) and moved into the decision register (§7); the closed items are listed below for traceability.
+Everything else raised during review has been decided (2026-08-27, 2026-09-01, 2026-09-08, and 2026-09-11) and moved into the decision register (§7); the closed items are listed below for traceability.
 
 ### 9.1 Still open
 
@@ -571,27 +527,32 @@ Everything else raised during review has been decided (2026-08-27, 2026-09-01, a
 | --- | --- | --- | --- |
 | O-1 | **Candor file contract** — columns, enums, formats for both directions; manifest fields; schema versioning. Internal proposal (D2-06) to be drafted **before** the technical call, then agreed directly with Candor. | Blocks the ingestion adapter and the outbound export format. | Engineering (Dev) drafts; joint call with Candor decides. |
 | O-5 | Partial-approval compliance semantics (whole-clock restart is the working rule) and the exact two-business-day boundary. | Compliance obligations. | Compliance. |
-| O-12 | **Telehealth availability: which level is attested?** (§6.7.1, F-1 — corrected 2026-09-01.) `Practitioner.telemedicineAvailable` + `telemedicineURL` exist at the practitioner level; no location- or network-level field exists. Either the practitioner-level field is the attested fact (prefillable today), or the directory needs per-location/per-network telehealth — a new field on the practitioner↔location↔network relationship beside `acceptingNewPatients`. | The prefill needs one named source per mandated field. | Product decides the level; Engineering + MDM add a field only if the finer level is required. **Product answer received 2026-09-08 — see §6.7.2; ratification pending.** |
-| O-13 | **Which level does the provider attest at** for accepting-new-patients, languages, and office hours (§6.7.1, F-2)? Each exists on the location, on the practitioner↔location join, and on the practitioner↔location↔network join — three genuinely different facts. | Picking the wrong level means the released change and the merged result disagree; the delta must also carry the survivorship engine's grouping key. | Product + Engineering (Portal design doc). **Product answer received 2026-09-08 — see §6.7.2; ratification pending.** |
-| O-14 | **Is `includePractitionerLocationInNetworkDirectory` attestable, or display-only?** It decides whether the practitioner-at-location appears in the directory at all — the most directory-consequential flag in the model — and it is not in the S2 §1.5.9 mandated list. | Directly determines what a member sees. | Product. **Product answer received 2026-09-08 — see §6.7.2; ratification pending.** |
 | O-17 | **Vendor-selection query configuration** (D2-38): what language/format the tenant-configurable NPI selection query is stored in (structured filter JSON vs. SQL vs. saved-view reference), where in tenant configuration it lives, who authors and validates it, and how injection/misuse is prevented. | Blocks the export job of the external-source-ingestion service. | Engineering (Dev), external-source-ingestion design doc. |
 | O-18 | **Vendor review semantics** (D2-38): exact meaning of **skip** (reappears next batch? parked?), whether an unresolved NPI is re-sent on the next cadence run, and how previously-rejected suppression (D2-07) interacts with monthly re-sends. | Defines reviewer workload and vendor billing exposure. | Product + Engineering. |
 | O-19 | **Vendor program surfaces and release path** (D2-38): does the vendor review queue live inside the Attestation Module UI application or its own surface, and does its Sync Latest reuse the attestation module's sync machinery or ship its own? | Decides UI scope and service boundaries. | Engineering, external-source-ingestion design doc. |
 | O-16 | **Termination timing rules** (D2-36): (1) terminated right after a task opens, before any email — cancel reminders + close the task? (proposed: yes); (2) terminated after submission, review pending — does review of the submitted changes continue? (proposed: yes, the facts were attested while active); (3) termination rolled back / reinstated — revive the closed obligation or start a fresh cycle? (proposed: CLOSED stays closed; fresh obligation from reinstatement); (4) does the 90-day clock continue across the gap or restart from reinstatement? (proposed: fresh clock — the listing was suppressed during the gap). Four-question ask drafted 2026-09-07. | Decides the termination consumer's exact behavior and the reinstatement seeding rule. | Product + Compliance. |
-### 9.2 Closed 2026-09-08 (resolution recorded in §7)
+### 9.2 Closed 2026-09-11 (resolution recorded in §7)
+
+| # | Was | Resolution |
+| --- | --- | --- |
+| O-12 | Telehealth availability: which level is attested? | **Practitioner level** — `core_practitioners_ov.telemedicineAvailable`; `telemedicineURL` not in the form. → D2-39 |
+| O-13 | Which level for accepting-new-patients, languages, office hours? | **Accepting-new-patients at the practitioner-at-location row** (`group_practitioner_locations.data.acceptingNewPatients`); **languages at the practitioner level** (`core_practitioners_ov.languages[]`); **office hours stay out** (D2-25). Phone, website and fax resolve to the practitioner-at-location row; handicap accessibility to `core_locations_ov`. → D2-39 |
+| O-14 | Is the directory-inclusion flag attestable? | **No.** It is the population filter for who receives an attestation, owned by the cycle module doc. → D2-39 |
+
+### 9.3 Closed 2026-09-08 (resolution recorded in §7)
 
 | # | Was | Resolution |
 | --- | --- | --- |
 | O-15 | One source per lane, or one shared `attested_data:{tenantId}` source (S14 proposal)? | **Two sources — `portal-attestation:{tenantId}` and `candor:{tenantId}`, both ranked above roster/UI; the shared source is rejected.** The full rationale (slice-replace data loss verified in code, per-field mixed review outcomes, OV lineage per S2 §3.5.2, the two-business-day clock, ranking) and the sync-worker consequence (rebuild the full slice per source from the release ledger, never sparse-write) are recorded in **D2-37**. |
 
-### 9.3 Closed 2026-09-01 (Product answers; resolutions recorded in §7)
+### 9.4 Closed 2026-09-01 (Product answers; resolutions recorded in §7)
 
 | # | Was | Resolution |
 | --- | --- | --- |
 | O-11 | Clock anchor: submission vs reviewer approval | **Submission.** The clock advances from the submission date. In the same answer Product removed the rejection-reset rule entirely (no rejection + 30 — it was a v1 working assumption, never spec-sourced) and confirmed a practitioner only ever has one upcoming attestation. → D2-28 |
 | — | "Per plan" mode/policy wording in the spec | **Plan = tenant.** Form modes and attester policy are per-tenant configuration; the module is always tenant-level; practitioner↔plan linking and payor-varying fields belong to NSCP solutioning. → D2-31 |
 
-### 9.4 Closed 2026-08-27 (resolutions recorded in §7)
+### 9.5 Closed 2026-08-27 (resolutions recorded in §7)
 
 | # | Was | Resolution |
 | --- | --- | --- |
@@ -629,4 +590,4 @@ Known contradictions (CT-001…CT-012) were catalogued during the v1 evidence pa
 1. Circulate **this v2** to the five team leads and Product as the decided workflow.
 2. Draft the internal file/batch contract proposal (O-1 / D2-06) and book the Candor technical call.
 3. Update the existing Jira tickets as each per-module design document is finalized (O-10 closed — no separate re-derivation pass).
-4. Start the per-module design documents, in dependency order: Attestation Module Backend + data layer + database → Attestation Module UI → Scheduler/Outreach extensions → Client Export. The directory accuracy service (Candor program) gets **one standalone design document** outside this series, `platform/directory-accuracy/directory-accuracy.md` (D2-38 — replaces the former SFTP Exchange and External Source Ingestion Layer module docs, whose drafts moved to `platform/directory-accuracy/source-material/` on 2026-09-09).
+4. Start the per-module design documents, in dependency order: Attestation Module Backend + data layer + database → Attestation Module UI → Scheduler/Outreach extensions → Client Export. The directory accuracy service (Candor program) gets its own module design documents outside this series, under `cos-docs/directory-accuracy/` — vendor export, then vendor ingestion (D2-38 — replaces the former SFTP Exchange and External Source Ingestion Layer module docs).

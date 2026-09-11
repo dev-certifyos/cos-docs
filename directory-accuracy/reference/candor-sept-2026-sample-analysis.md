@@ -4,7 +4,7 @@
 - `Data Dictionary - Accuracy Scorecard (MVP) - Sept 2026.xlsx` — revision of the July 2026 dictionary (S13).
 - `MVP_09022026_Sample (1).xlsx` — a sample of the file Candor intends to send us. 2 sheets: *Physicians Directory Accuracy* (31 rows, 57 columns, 11 NPIs) and *Physicians Additional Locations* (16 rows, 31 columns, 12 NPIs). New York practitioners; appears to be a real-data excerpt, not synthetic.
 
-**Verdict in one paragraph.** The September files are a cleanup, not a redesign: same wide NPI×address grain, same five-column pattern per attribute, tightened types and enums, the MMO drift (S12/CT-011) mostly gone. Nothing in them invalidates our proposal (`candor-exchange-contract-proposal.md`); its transport, naming, batch-identity and change-control sections are untouched because Candor's sample has **no filename convention, no batch reference, no tenant, no schema version, and is XLSX with two sheets** — every one of those is still our ask. What changes: the §8 divergence table must be rebased on September, the reading guide (`candor-data-dictionary-explained.md`) needs a September delta, and the sample exposes **eight semantic problems** we should raise before signing — the biggest being what the *Additional Locations* tab actually means when a provider has no valid location left.
+**Verdict in one paragraph.** The September files are a cleanup, not a redesign: same wide NPI×address grain, same five-column pattern per attribute, tightened types and enums, the MMO drift (S12/CT-011) mostly gone. Nothing in them invalidates our proposal (`candor-exchange-contract-proposal.md`); its transport, naming, batch-identity and change-control sections are untouched because Candor's sample has **no filename convention, no batch reference, no tenant, no schema version, and is XLSX with two sheets** — every one of those is still our ask. What changes: the §8 divergence table must be rebased on September, and the sample exposes **eight semantic problems** we should raise before signing — the biggest being what the *Additional Locations* tab actually means when a provider has no valid location left.
 
 ---
 
@@ -41,7 +41,7 @@ Unchanged except the two NPI reason IDs (`nppes_deactivated`, `inactive_direct_o
 
 - Row grain: one row per NPI × client-submitted address.
 - Five-column pattern per attribute; `_candor_value` "only when INVALID" rule still stated in the notes.
-- Client-provided input set: `npi`, `first_name`, `last_name`, `specialties`, `practice_name`, `address_line1/2`, `city`, `state`, `zip`, `phone`, `fax`, `accepting_new_patients`, `pcp_at_location`. **Still no input for group affiliation, website, languages, telehealth, ADA** — five of our eleven mandated attestation fields are not in Candor's verification scope. Unchanged open question for the call.
+- Client-provided input set: `npi`, `first_name`, `last_name`, `specialties`, `practice_name`, `address_line1/2`, `city`, `state`, `zip`, `phone`, `fax`, `accepting_new_patients`, `pcp_at_location`. **Still no input for group affiliation, website, languages, telehealth, ADA** — five of our eleven mandated directory fields are not in Candor's verification scope. Unchanged open question for the call.
 - Evidence as a JSON array of `{reason, evidence: date|url, value}`.
 - No `recommendation` verb column in the data; verb is implied by status + reason.
 
@@ -121,23 +121,15 @@ Either way, **the "extensibility" argument to make on the call is concrete:** in
 | §9 agenda | Add: what the 7 orphan NPIs in *Additional Locations* mean; whether `pcp_at_location` grading of a blank input is intended; confirm `INCONCLUSIVE` as confidence; confirm reason ID spellings |
 | Header | Update "The one real Candor delivery we have seen" → two artefacts now (MMO delta June, MVP sample Sept) |
 
-### 4.2 `candor-data-dictionary-explained.md` — change
-
-- §1 attribute table: remove `active_state_license`, `fax_deactivated_status`, `candor_additional_location`; note types.
-- §3: replace "flag `candor_additional_location = TRUE` says look in second sheet" with "join by NPI; the flag was removed in September; 7 orphan NPIs observed".
-- §4 reason table: `deactivated_npi` → `nppes_deactivated`; `inactive` → `inactive_direct_outreach`.
-- §6 drift table: retitle "MMO delivery (June) vs September dictionary vs September sample"; most MMO rows now resolved; add C1–C8.
-- New §: September sample walkthrough (Kanter, NPI 1003001371: sent 2 locations, 1 INVALID `no_evidence_health_system`, 1 VALID with `Fl 2` added and practice name "INVALID"; 1 discovered location on the other sheet).
-
-### 4.3 `reference/samples/` — no change to shape; small content tweaks
+### 4.2 `reference/samples/` — no change to shape; small content tweaks
 
 Our sample recommendations file already models everything the September sample does, in long form. Two tweaks: use `nppes_deactivated` if we ever add an NPI-level example, and add one `UPDATE practice_address` / `typo_address` row (suite added) to mirror C7.
 
-### 4.4 Unchanged
+### 4.3 Unchanged
 
 - Transport (`from/`/`to/`, `candor-health` account), batch id, filename echo, schema versioning, idempotency, processing guarantees (proposal §2, §3, §6, §7). Candor's sample has none of these; they remain our asks.
 - Export template (§4). Candor's client-input set confirms we send fields, not NPIs.
-- Adapter design (retired draft `platform/directory-accuracy/source-material/ingestion.md`, to be carried into `directory-accuracy.md`): the vendor-specific pivot lives in the Candor adapter either way.
+- Adapter design (to be fixed in the vendor ingestion module doc): the vendor-specific pivot lives in the Candor adapter either way.
 
 ---
 

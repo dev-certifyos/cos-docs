@@ -1,8 +1,8 @@
-# Directory Accuracy & Attestations — Audit and Observability Design Brief
+# Attestation Module — Audit and Observability Design Brief
 
-**Prepared:** 2026-08-27 · **Companions:** `directory-accuracy-attestations-consolidated-source-of-truth-v2.md` (workflow), `directory-accuracy-attestations-module-architecture-brief.md` (per-module technology) · **Grounded in:** v1 §14 (reliability/security/operations), §19.3 (identifiers and idempotency), §19.7 (verified MDM lineage gap)
+**Prepared:** 2026-08-27 · **Companions:** `source-of-truth-v2.md` (workflow), `architecture-brief.md` (per-module technology) · **Grounded in:** v1 §14 (reliability/security/operations), §19.3 (identifiers and idempotency), §19.7 (verified MDM lineage gap)
 
-**What this is.** v2 states, in several places, that everything must be reconstructable: *"what changed, why, who acted, when, from which source, and what result reached the Golden record"* (§3.2), and that audit and observability apply at **every** step, not only ingestion (§6.5.6, §8). This document turns that requirement into a design: the event model, the per-stage catalogue of what is recorded, the retention and access rules, the telemetry and alerting, and the one confirmed gap in the existing platform that blocks a complete lineage story.
+**What this is.** v2 states, in several places, that everything must be reconstructable: *"what changed, why, who acted, when, from which source, and what result reached the Golden record"* (§3.2), and that audit and observability apply at **every** step (§8). This document turns that requirement into a design: the event model, the per-stage catalogue of what is recorded, the retention and access rules, the telemetry and alerting, and the one confirmed gap in the existing platform that blocks a complete lineage story.
 
 ---
 
@@ -30,16 +30,14 @@ The design is only correct if these queries are answerable directly from stored 
 
 1. Show every event in Dr. Patel's 2026-Q3 attestation obligation, in order, with actors and timestamps.
 2. Who attested for Dr. Patel, were they the practitioner or an admin acting on their behalf, and by what authorization?
-3. This vendor recommendation was rejected — by whom, when, for what reason, and against which batch and row?
-4. This value in the Golden record came from where? Which source won, under which ranking configuration, and which reviewer approved the item that produced it?
-5. A reviewer approved a change and the Golden record does not show it. Why? *(Expected answer: a higher-ranked source won — approval is not the same as winning, v2 §6.11.)*
-6. Prove that every one of the 43,812 rows in vendor batch `B-2026-08-01` received exactly one disposition, and reconcile that against the manifest count.
-7. Which practitioners in this tenant have not attested, as of what read timestamp?
-8. Was the two-business-day obligation met for this attestation? When did the clock start and when did the change reach the OV?
-9. Did anyone touch this record outside the workflow — an operator replay, a configuration change, a paused tenant?
-10. Which items are in quarantine right now, since when, and why?
+3. This value in the Golden record came from where? Which source won, under which ranking configuration, and which reviewer approved the item that produced it?
+4. A reviewer approved a change and the Golden record does not show it. Why? *(Expected answer: a higher-ranked source won — approval is not the same as winning, v2 §6.11.)*
+5. Which practitioners in this tenant have not attested, as of what read timestamp?
+6. Was the two-business-day obligation met for this attestation? When did the clock start and when did the change reach the OV?
+7. Did anyone touch this record outside the workflow — an operator replay, a configuration change, a paused tenant?
+8. Which items are in quarantine right now, since when, and why?
 
-Questions 4, 5, and 8 are the hard ones. Question 4 currently has **no complete answer on the existing platform** — see §9.
+Questions 3, 4, and 6 are the hard ones. Question 3 currently has **no complete answer on the existing platform** — see §9.
 
 ---
 
@@ -52,9 +50,7 @@ That identity is the audit trail's primary correlation key. Around it, each stag
 ```
 correlation_id       tenant + practitioner + due_period      — the obligation, the spine
   task_id            the attestation task
-  submission_id      one Portal submission (Lane A)
-  batch_id           one vendor delivery (Lane B), plus vendor_batch_id and export_batch_id
-  row_id             one row inside that batch
+  submission_id      one Portal submission
   change_item_id     one staged change item (+ integer version)
   review_action_id   one reviewer decision
   release_id         one Sync Latest invocation, plus release_item_id per item
@@ -64,9 +60,9 @@ correlation_id       tenant + practitioner + due_period      — the obligation,
 request_id / trace_id / pubsub_message_id — the technical join to telemetry
 ```
 
-**The rule:** an audit event that cannot name its `correlation_id` is a bug, not an event. The only exceptions are genuinely pre-identity events — a batch arriving before its rows are resolved to practitioners, and infrastructure-level events like a configuration change — and those carry `batch_id` or a tenant-level scope instead.
+**The rule:** an audit event that cannot name its `correlation_id` is a bug, not an event. The only exceptions are infrastructure-level events like a configuration change, and those carry a tenant-level scope instead.
 
-**Why this matters practically.** Question 4 in §2 is a five-hop join across staging, review, sync, MDM, and export. Without one identifier surviving all five hops, that query is a reconstruction exercise performed under time pressure during a client dispute. With it, it is one indexed read.
+**Why this matters practically.** Question 3 in §2 is a five-hop join across staging, review, sync, MDM, and export. Without one identifier surviving all five hops, that query is a reconstruction exercise performed under time pressure during a client dispute. With it, it is one indexed read.
 
 ---
 
@@ -80,9 +76,8 @@ Every audit event names an actor, and every actor resolves to one of these types
 | `PROVIDER_ADMIN` | Attesting **on behalf of** a practitioner | Portal user id + `on_behalf_of_practitioner_id` + the authorization basis | D2-17: authorization basis is tenant scope. Record it explicitly so a later policy change is visible in history |
 | `PAYER_REVIEWER` | Approve / reject / skip / assign / bulk / rollback / Sync Latest | Admin user id, roles held at the time of the action | Record roles **as of the action**, not as looked up later — role grants change |
 | `OPERATOR` | Support/ops replay, retry, quarantine handling, pause | Admin user id + the runbook action invoked | Every operator action is an audited replay; direct database edits are prohibited outright |
-| `SCHEDULER` | Cycle scan, export job, client export job, reconciliation sweep | Job name + run id + trigger time | Job runs get their own audit events with counts, not just per-entity events |
-| `WORKER` | Ingestion worker, sync worker, outbox relay | Worker/service name + deployment version + task/message id | Deployment version matters: "which build made this decision" |
-| `EXTERNAL_VENDOR` | The party that deposited a file | SFTP identity (the account, not the filename) + `source_id` from the registry | Origin is proven by which account deposited the file, never by its name or checksum |
+| `SCHEDULER` | Cycle scan, client export job, reconciliation sweep | Job name + run id + trigger time | Job runs get their own audit events with counts, not just per-entity events |
+| `WORKER` | Sync worker, outbox relay | Worker/service name + deployment version + task/message id | Deployment version matters: "which build made this decision" |
 | `MDM_ENGINE` | Cleansing / matching / survivorship / Terminations | Engine name + config version (see §9) | Records the *outcome* that the workflow did not decide |
 
 **Two rules people forget.**
@@ -103,13 +98,13 @@ audit_events
   occurred_at          when the act happened (business time)
   recorded_at          commit timestamp (system time)
   stage                STAGE_0 … STAGE_6 | OPS
-  event_type           enum, e.g. ITEM_APPROVED, ROW_DISPOSITIONED
+  event_type           enum, e.g. ITEM_APPROVED, TASK_CREATED
   outcome              SUCCEEDED | FAILED | QUARANTINED | SKIPPED
   correlation_id       tenant + practitioner + due_period
-  task_id, submission_id, batch_id, row_id,
+  task_id, submission_id,
   change_item_id, change_item_version,
   review_action_id, release_id, release_item_id     (each nullable, all that apply populated)
-  entity_type          TASK | SUBMISSION | CHANGE_ITEM | BATCH | ROW | RELEASE | CONFIG
+  entity_type          TASK | SUBMISSION | CHANGE_ITEM | RELEASE | CONFIG
   entity_id
   actor_type, actor_id, actor_display, actor_roles
   on_behalf_of_practitioner_id
@@ -118,7 +113,6 @@ audit_events
   operation            ADD | UPDATE | REMOVE | FLAG | ACKNOWLEDGE
   before_value, after_value        normalized, JSON
   reason_code, reason_text         mandatory on every rejection (D2-24)
-  disposition                      the ingestion disposition, when applicable
   error_code, error_detail
   request_id, trace_id, pubsub_message_id, deployment_version
   event_schema_version
@@ -129,9 +123,9 @@ audit_events
 - **Both timestamps.** `occurred_at` and `recorded_at` differ whenever an event is replayed, backfilled, or delivered late. Collapsing them into one column destroys the ability to distinguish "this happened late" from "this was recorded late," which is exactly the distinction a two-business-day compliance question turns on.
 - **Written in the same transaction as the state change**, alongside the outbox record. v1 §14.2 lists "audit/outbox persistence fails inside a local mutation" as a required test case. The correct behaviour is that the mutation fails too — a state change with no audit row is worse than no state change.
 - **Append-only, enforced.** No UPDATE and no DELETE path exists in the data layer for this table. A correction is a new compensating event referencing the original `audit_id`, never an edit. This is also what makes the table safe to stream to an archive without reconciliation.
-- **Normalized before/after values**, using the same versioned normalization rules as the `rejected_recommendations` match key (v2 §6.6). If normalization rules change, the version must change with them — a silent normalization change would make historical comparisons quietly wrong.
-- **Indexes:** `(tenant_id, correlation_id, occurred_at)` for the per-practitioner story; `(tenant_id, actor_id, occurred_at)` for "what did this reviewer do"; `(tenant_id, entity_type, entity_id, occurred_at)` for the per-item history the UI renders; `(tenant_id, batch_id, disposition)` for batch reconciliation. Partition/interleave per tenant so one tenant's volume never slows another's reads — the same invariant v2 §6.6 already states for the rejections table.
-- **Volume estimate to sanity-check the design:** ~70k practitioners per cycle, four cycles a year, plus one audit row per vendor row (a 100k-row batch is 100k disposition events). Order of magnitude: single-digit millions of rows per year per large tenant. Spanner handles this comfortably; the reason to care is the archive tiering in §8, not query performance.
+- **Normalized before/after values**, using versioned normalization rules. If normalization rules change, the version must change with them — a silent normalization change would make historical comparisons quietly wrong.
+- **Indexes:** `(tenant_id, correlation_id, occurred_at)` for the per-practitioner story; `(tenant_id, actor_id, occurred_at)` for "what did this reviewer do"; `(tenant_id, entity_type, entity_id, occurred_at)` for the per-item history the UI renders. Partition/interleave per tenant so one tenant's volume never slows another's reads.
+- **Volume estimate to sanity-check the design:** ~70k practitioners per cycle, four cycles a year, a dozen or so events per obligation. Order of magnitude: low millions of rows per year per large tenant. Spanner handles this comfortably; the reason to care is the archive tiering in §8, not query performance.
 
 ---
 
@@ -145,32 +139,16 @@ The catalogue below is the checklist. Each stage's design document owns its colu
 ### Stage 1 — Cycle detection and outreach
 `CYCLE_SCAN_STARTED` / `COMPLETED` (window bounds, candidates examined, tasks created, duplicates skipped) · `IDENTITY_COMPUTED` · `TASK_CREATED` · `TASK_CREATION_SKIPPED_DUPLICATE` (the unique-index no-op — audited, because a silent skip and a bug look identical otherwise) · `OUTREACH_SCHEDULED` / `OUTREACH_SENT` / `OUTREACH_BOUNCED` / `OUTREACH_FAILED` (tier T-30/T-7/T+1, template id, delivery reference) · `TASK_MARKED_OVERDUE` · `CLOCK_SET` (due date and the rule that produced it).
 
-### Stage 2, Lane A — Portal
+### Stage 2 — Portal
 `PORTAL_SESSION_STARTED` (auth method, resolved identity, practitioners visible to this actor) · `FORM_PREFILLED` (snapshot version and the OV read timestamp — this is the evidence of *what the attester was shown*) · `SUBMIT_REJECTED_STALE_SNAPSHOT` · `SUBMIT_BLOCKED_ALREADY_ATTESTED` (who had already attested, and when) · `ATTESTATION_SUBMITTED` (NO_CHANGE or the full delta, attester type, `on_behalf_of`) · `STAGED_ITEM_CREATED` per delta · `TASK_STATUS_CHANGED` → SUBMITTED · `CLOCK_ADVANCED` (submission + 90 days).
 
 **The one to insist on: `FORM_PREFILLED` with its snapshot version.** An attestation is a statement about specific data at a specific moment. Without recording what was displayed, "I attested that this was correct" has no referent, and a disputed attestation cannot be defended.
 
-### Stage 2, Lane B — Outbound, inbound, ingestion
-`EXPORT_RUN_STARTED` / `COMPLETED` · `EXPORT_FILE_WRITTEN` (export batch id, row count, SHA, GCS archive URI) · `EXPORT_MANIFEST_WRITTEN` · `INBOUND_OBJECT_DETECTED` (object name, size, depositing SFTP identity) · `MANIFEST_RECEIVED` (vendor batch id, referenced export batch id, declared SHA and counts, produced-at) · `BATCH_REGISTERED` / `BATCH_SKIPPED_ALREADY_SEEN` · `CHECKSUM_VERIFIED` / `CHECKSUM_MISMATCH` · `ROWCOUNT_VERIFIED` / `ROWCOUNT_MISMATCH` · `SCHEMA_VERSION_RESOLVED` / `SCHEMA_VERSION_REJECTED` (whole batch rejected, nothing partially staged) · **`ROW_DISPOSITIONED` — one per row, always**, carrying the disposition, the reason, and for previously-rejected rows the `rejected_recommendation_id` that matched · `ROW_QUARANTINED` (which dependency was unavailable) · `QUARANTINE_RETRIED` / `QUARANTINE_RESOLVED` / `QUARANTINE_CLOSED_BY_OPERATOR` · `BATCH_COMPLETED` (per-disposition counts, reconciled against the manifest).
-
-**The reconciliation invariant, stated as an assertion the batch must pass:**
-
-```
-manifest_row_count
-  == no_op + duplicate_stale_superseded + excluded + quarantined + previously_rejected + actionable
-```
-
-If that equation does not balance, the batch is not complete, and `BATCH_COMPLETED` must not be written. This single check is what makes "nothing is ever silently discarded" (v2 §8) a verifiable property rather than an intention.
-
-**Note on suppressed rows.** D2-07 suppresses previously-rejected rows from the reviewer queue in MVP. Suppressed is not invisible: the audit row is written in full, so the answer to "why did the reviewer never see this?" is always available, and turning suppression off later is a configuration change against data that already exists.
-
 ### Stage 3 — Staging
-`IDENTITY_RESOLVED` (NPI/crosswalk resolution path, the resolved canonical practitioner, and the resolution method) · `IDENTITY_RESOLUTION_FAILED` → quarantine · `STAGED_ITEM_CREATED` (source_id, attribute, operation, normalized before/after, version 1) · `CROSS_LANE_JOINED` (this vendor item and this attestation now sit on the same practitioner).
-
-Identity resolution deserves its own event because v2 §6.8 names misjoining two practitioners as "a worst-class failure." If it ever happens, the audit must show exactly which key resolved to which practitioner and by what method.
+`STAGED_ITEM_CREATED` (source_id, attribute, operation, normalized before/after, version 1) — one per delta in the submission, written in the submission transaction.
 
 ### Stage 4 — Review
-`ITEM_ASSIGNED` / `UNASSIGNED` / `REASSIGNED` · `ITEM_APPROVED` · `ITEM_REJECTED` (reason code from the picklist **and** free text, both mandatory — D2-24) · `ITEM_SKIPPED` · `ACTION_UNDONE` · `NO_CHANGE_ACKNOWLEDGED` (D2-09) · `BULK_ACTION_EXECUTED` (the bulk invocation as one event, **plus one per-item event each** — partial failure is never hidden, v2 §6.9) · `REJECTED_RECOMMENDATION_RECORDED` (the write into the memory table) · `ITEM_ROLLED_BACK` (approved → pending, history preserved) · `DECISION_CONFLICT_REJECTED` (a version-mismatch write that lost — audited, because it proves the concurrency control actually engaged).
+`ITEM_ASSIGNED` / `UNASSIGNED` / `REASSIGNED` · `ITEM_APPROVED` · `ITEM_REJECTED` (reason code from the picklist **and** free text, both mandatory — D2-24) · `ITEM_SKIPPED` · `ACTION_UNDONE` · `NO_CHANGE_ACKNOWLEDGED` (D2-09) · `BULK_ACTION_EXECUTED` (the bulk invocation as one event, **plus one per-item event each** — partial failure is never hidden, v2 §6.9) · `ITEM_ROLLED_BACK` (approved → pending, history preserved) · `DECISION_CONFLICT_REJECTED` (a version-mismatch write that lost — audited, because it proves the concurrency control actually engaged).
 
 Every one of these carries `change_item_version` before and after. That is what makes "two reviewers cannot silently overwrite each other" auditable rather than merely implemented.
 
@@ -188,7 +166,7 @@ Also at this stage: `SOURCE_RANKING_CONFIG_CHANGED` and `SYNC_REFUSED_MISSING_RA
 `ATTESTED_SET_COMPUTED` (as-of timestamp, practitioner count, inclusion rule) · `CLIENT_EXPORT_GENERATED` (row count, SHA, GCS archive URI) · `CLIENT_EXPORT_DELIVERED` (destination, manifest written last, delivery confirmation) · `CLIENT_EXPORT_FAILED`.
 
 ### Operations
-`QUARANTINE_INSPECTED` · `REPLAY_TRIGGERED` (what, why, original idempotency key reused) · `RECONCILIATION_MISMATCH_DETECTED` / `RESOLVED` · `TENANT_PAUSED` / `RESUMED` · `SOURCE_PAUSED` · `WORKER_LEASE_RECOVERED` · `CONFIG_CHANGED`.
+`QUARANTINE_INSPECTED` · `REPLAY_TRIGGERED` (what, why, original idempotency key reused) · `RECONCILIATION_MISMATCH_DETECTED` / `RESOLVED` · `TENANT_PAUSED` / `RESUMED` · `WORKER_LEASE_RECOVERED` · `CONFIG_CHANGED`.
 
 ---
 
@@ -196,7 +174,7 @@ Also at this stage: `SOURCE_RANKING_CONFIG_CHANGED` and `SYNC_REFUSED_MISSING_RA
 
 Write auditing is settled above. **Read auditing is a Compliance decision we should raise rather than assume.** The reviewer queue displays provider data, and some regimes require recording who *viewed* a record, not only who changed it.
 
-Recommended position: audit **reads that are scoped to an individual** (opening a practitioner's side-by-side detail view, exporting the queue) and do **not** audit list/grid pagination, which would generate enormous volume for little evidentiary value. Implement it as a distinct `access_events` stream rather than mixing view events into `audit_events` — different volume profile, different retention, and mixing them makes the mutation history harder to read.
+Recommended position: audit **reads that are scoped to an individual** (opening a practitioner's detail view, exporting the queue) and do **not** audit list/grid pagination, which would generate enormous volume for little evidentiary value. Implement it as a distinct `access_events` stream rather than mixing view events into `audit_events` — different volume profile, different retention, and mixing them makes the mutation history harder to read.
 
 Flag this to Compliance as an open item with a recommendation attached, not as a solved problem.
 
@@ -207,7 +185,6 @@ Flag this to Compliance as an open item with a recommendation attached, not as a
 - **Retention: 7 years, final (D2-20).** That is the design constraint, not a working figure any more.
 - **Tiering.** Keep the recent window (proposal: 18 months) hot in Spanner for UI history rendering and operational queries. Age older events to GCS in a columnar format (Parquet/Avro) with a documented schema and object versioning, queryable from BigQuery for compliance requests. The archive is append-only by construction and the objects are immutable.
 - **The archive must be verifiable.** Every archive batch records its source range, row count, and checksum, and a periodic job re-verifies that the archived count matches what was aged out. An archive nobody has ever read back is not evidence; it is a hope.
-- **Raw vendor files are themselves audit artifacts.** The original file and its manifest stay in GCS, immutable and versioned, for the same 7 years. v1 §14.1 requires raw external input and evidence to be kept protected and **separate from indexed workflow fields** — so the audit row references the archive URI; it does not inline the vendor's payload.
 - **Tamper evidence.** Append-only enforcement in the data layer plus IAM that grants no delete on the table or the archive bucket, bucket retention policy/object hold on the archive, and Cloud Audit Logs on the infrastructure itself (who changed the IAM, who touched the bucket policy). The application cannot be the only thing protecting the application's evidence.
 - **Legal hold.** A hold must be able to suspend expiry for a tenant or a practitioner. Cheap to design now, expensive to retrofit.
 - **Deletion requests.** A provider data-deletion request and a 7-year audit obligation conflict on their face. That conflict is Compliance's to resolve; the design should expose the hooks (crypto-shredding of PII fields while retaining the event skeleton) rather than pretending it will not arise.
@@ -216,11 +193,11 @@ Flag this to Compliance as an open item with a recommendation attached, not as a
 
 ## 9. The confirmed lineage gap — a cross-team dependency, not a detail
 
-Verified against the code in v1 §19.7, and it is the one thing that makes question 4 in §2 unanswerable today:
+Verified against the code in v1 §19.7, and it is the one thing that makes question 3 in §2 unanswerable today:
 
 **The platform cannot currently prove which survivorship configuration made a given merge decision.** `contribution_map` records the per-field winner (`value, sourceId, sourceType, cleansedSourceType, crosswalkId, certifyId, updatedAt`) — but no config version, no rule id, no rank, no reason. `tenant_configurations` has no version or history column; the 60-second refresh overwrites the in-memory config in place; the config's own `version` field is written only to logs. So a decision made under yesterday's ranking is indistinguishable from one made under today's.
 
-For this feature, that gap is directly load-bearing: **D2-18 makes per-tenant source ranking the thing that decides whether an approved attestation or a vendor recommendation wins.** Without config-version lineage, "why did the vendor's value beat the provider's own attestation on 14 August?" has no stored answer.
+For this feature, that gap is directly load-bearing: **D2-18 makes per-tenant source ranking the thing that decides whether an approved attestation or another source's value wins.** Without config-version lineage, "why did a roster value beat the provider's own attestation on 14 August?" has no stored answer.
 
 The fix is three small additive changes to the **existing** survivorship service, not a new service:
 
@@ -263,7 +240,7 @@ This is not a greenfield telemetry decision. Most of the stack exists; the job i
 
 | Signal | Tool | Emitted how | Retention | Answers |
 | --- | --- | --- | --- | --- |
-| **Traces** | OTel SDK → Collector (Cloud Run) → backend | Auto-instrumented HTTP/DB spans, plus manual spans around batch parse, per-row disposition, review action, sync item | Days | "Where did this request spend its time / where did it stop?" |
+| **Traces** | OTel SDK → Collector (Cloud Run) → backend | Auto-instrumented HTTP/DB spans, plus manual spans around review action, sync item, and outreach command | Days | "Where did this request spend its time / where did it stop?" |
 | **Metrics** | Micrometer → OTLP → Cloud Monitoring | Explicit counters, timers, gauges (§10.3) | 6–13 months | "Is the system healthy, and what is the trend?" |
 | **Logs** | Quarkus JSON logging / pino-stackdriver → Cloud Logging | One structured line per meaningful step, always carrying the correlation fields | 30–90 days | "What exactly happened in this run?" |
 | **Errors** | Sentry | Exceptions, tagged with release, environment, tenant, correlation id | Sentry policy | "What is breaking, how often, since which deploy?" |
@@ -278,18 +255,18 @@ W3C `traceparent` via the `tracecontext` propagator (already configured). The ch
 ```
 Portal/UI HTTP request
   → api-layer (span starts, trace_id minted)
-  → Pub/Sub publish        ← traceparent copied into MESSAGE ATTRIBUTES by the publisher
-  → ingestion worker       ← traceparent EXTRACTED from attributes, span linked as parent
+  → Pub/Sub publish        ← traceparent copied into MESSAGE ATTRIBUTES by the outbox relay
+  → consumer               ← traceparent EXTRACTED from attributes, span linked as parent
   → Cloud Task enqueue     ← traceparent copied into the task HTTP HEADERS
   → row worker → data layer → Spanner
   → sync worker → MDM/Terminations HTTP call (traceparent forwarded)
 ```
 
-**Neither Pub/Sub nor Cloud Tasks propagates trace context on its own.** If the publisher does not copy `traceparent` into message attributes and the consumer does not extract it, every trace ends at the queue boundary and the pipeline becomes four disconnected traces instead of one story. Make this an explicit work item in the ingestion design document, not an assumption.
+**Neither Pub/Sub nor Cloud Tasks propagates trace context on its own.** If the publisher does not copy `traceparent` into message attributes and the consumer does not extract it, every trace ends at the queue boundary and the pipeline becomes four disconnected traces instead of one story. Make this an explicit work item in the backend design document, not an assumption.
 
 **Baggage** carries `tenant_id` and `correlation_id` so every downstream span is filterable by obligation without re-deriving it.
 
-**Sampling:** `always_on` is currently set and is fine at this volume (a monthly vendor batch, not a high-QPS API). If cost becomes an issue, move to `parentbased_traceidratio` — but **pin error, quarantine, and sync paths to always-sample**, because those are the traces anyone will ever go looking for.
+**Sampling:** `always_on` is currently set and is fine at this volume (tens of thousands of tasks per cycle, not a high-QPS API). If cost becomes an issue, move to `parentbased_traceidratio` — but **pin error, quarantine, and sync paths to always-sample**, because those are the traces anyone will ever go looking for.
 
 ### 10.3 Metric catalogue — concrete names
 
@@ -312,22 +289,9 @@ attestation.portal.submission                 counter   {tenant, outcome}       
 attestation.portal.stale_snapshot_rejected    counter   {tenant}
 attestation.portal.already_attested_blocked   counter   {tenant}
 
-# Ingestion
-attestation.ingest.batch.received             counter   {tenant, source_id}
-attestation.ingest.batch.skipped_duplicate    counter   {tenant, source_id}
-attestation.ingest.batch.rejected             counter   {tenant, source_id, reason}
-attestation.ingest.row.dispositioned          counter   {tenant, source_id, disposition}
-attestation.ingest.batch.duration             timer     {tenant, source_id}
-attestation.ingest.rows_per_second            gauge     {tenant, source_id}
-attestation.ingest.quarantine.depth           gauge     {tenant, reason}
-attestation.ingest.quarantine.oldest_age      gauge     {tenant}
-
-# Staging
-attestation.identity.resolution               counter   {tenant, outcome, method}
-
 # Review
 attestation.review.queue.depth                gauge     {tenant, bucket}        # bucket = aging band
-attestation.review.decision                   counter   {tenant, action, source_id}
+attestation.review.decision                   counter   {tenant, action}
 attestation.review.version_conflict           counter   {tenant}
 attestation.review.bulk.partial_failure       counter   {tenant}
 
@@ -354,13 +318,10 @@ attestation.reconciliation.mismatch           counter   {tenant, check}
 ```
 attestation.compliance.two_business_day_risk  gauge     {tenant, bucket}
    # bucket = >24h_remaining | 12-24h | <12h | BREACHED
-   # Portal lane only — D2-29 attaches the clock to attestations, not vendor recommendations
+   # D2-29 attaches the clock to the attestation submission
 attestation.compliance.non_attested           gauge     {tenant}
    # served from the canonical task table (v1 §19.8), same query path as the API and the grid
 attestation.compliance.cycle_completion_rate  gauge     {tenant, due_period}
-attestation.compliance.suppressed_rows        counter   {tenant, source_id}
-   # how many recommendations D2-07 hid from reviewers — unexpected growth means the rule is
-   # doing something nobody intended
 ```
 
 ### 10.4 What a structured log line looks like
@@ -371,20 +332,19 @@ Every line, from every service, carries the correlation fields. This is what mak
 {
   "severity": "INFO",
   "timestamp": "2026-08-27T14:22:07.481Z",
-  "message": "row dispositioned",
+  "message": "item approved",
   "logging.googleapis.com/trace": "projects/certifyos-development/traces/4bf92f3577b34da6a3ce929d0e0e4736",
   "logging.googleapis.com/spanId": "00f067aa0ba902b7",
   "service": "api-layer",
   "deployment_version": "api-layer@2026.08.27-1",
   "tenant_id": "harbor-health",
   "correlation_id": "harbor-health:prac_8f21c4:2026Q3",
-  "batch_id": "b_01J9…",
-  "row_id": 41208,
-  "source_id": "candor:harbor-health",
+  "task_id": "t_9c11",
+  "source_id": "portal-attestation:harbor-health",
   "attribute": "primary_phone",
   "operation": "UPDATE",
-  "disposition": "ACTIONABLE",
-  "change_item_id": "ci_01J9…"
+  "change_item_id": "ci_a1",
+  "change_item_version": 2
 }
 ```
 
@@ -398,10 +358,10 @@ severity>=INFO
 
 ### 10.5 Dashboards — four, each with an owner
 
-1. **Pipeline health** (on-call) — batch receipt vs. expected cadence, rows/second, disposition mix over time, quarantine depth and age, DLQ depth, sync success rate, OV verification mismatches.
-2. **Review operations** (payer ops lead) — queue depth by aging bucket, decisions per reviewer per day, unassigned pool size, rejection rate by source, bulk partial-failure rate.
-3. **Compliance** (Compliance + client-facing teams) — two-business-day risk buckets, non-attested counts per tenant, cycle completion rate, time from submission to OV landing, suppressed-row volume.
-4. **Data integrity** (engineering) — audit write failures (must be flat zero), reconciliation mismatches by check, outbox lag, identity-resolution failure rate, `approved_did_not_survive` counts by winning source.
+1. **Pipeline health** (on-call) — scheduler run health, outreach delivery and failure rates, outbox lag, DLQ depth, sync success rate, OV verification mismatches.
+2. **Review operations** (payer ops lead) — queue depth by aging bucket, decisions per reviewer per day, unassigned pool size, rejection rate, bulk partial-failure rate.
+3. **Compliance** (Compliance + client-facing teams) — two-business-day risk buckets, non-attested counts per tenant, cycle completion rate, time from submission to OV landing.
+4. **Data integrity** (engineering) — audit write failures (must be flat zero), reconciliation mismatches by check, outbox lag, `approved_did_not_survive` counts by winning source.
 
 All four defined in CDKTF alongside the alert policies, so a dashboard change is a reviewed pull request.
 
@@ -413,16 +373,13 @@ Alert on *work being stuck or truth being at risk*, never on raw volume. Each al
 | --- | --- | --- | --- |
 | Audit write failure | `attestation.audit.write_failure > 0` over 1 min | **Page** | State is changing without evidence — halt the affected worker, investigate before resuming |
 | DLQ non-empty | Any new subscription's DLQ depth > 0 for 5 min | **Page** | A stuck business fact; inspect, fix, replay with the original idempotency key |
-| Batch reconciliation failed | `attestation.reconciliation.mismatch{check="batch_counts"} > 0` | **Page** | Batch is incomplete; do not mark complete, reconcile against the manifest |
 | OV verification mismatch | Rate above baseline over 15 min | **Page** | Sync asked for X and Y landed — stop the release, reconcile before replay |
 | Poison quarantine | `attestation.sync.item.poison_quarantined > 0` | Ticket | Operator inspects, fixes or closes with reason |
-| Quarantine ageing | `quarantine.oldest_age > 24h` | Ticket | Dependency may still be down, or rows are stranded |
-| Vendor batch overdue | No batch from a source within its cadence window + grace | Ticket | A vendor going quiet is otherwise a silent failure |
 | Scheduler anomaly | Missed run, or `task.created` deviates sharply from `candidates.examined` | Ticket | Window query should self-heal; verify it did |
 | Two-business-day risk | `compliance.two_business_day_risk{bucket="<12h"} > 0` | Notify ops | Reviewer workload triage |
 | Sync failure rate | > threshold over 15 min | Ticket | Check MDM/Terminations health first |
 
-Two things worth deriving as **log-based metrics** in CDKTF rather than instrumenting by hand, because they are cheap and rarely change: batch rejection reasons, and identity-resolution failures. Everything in §10.3 that drives an alert should be a real metric, not a log-derived one — log-based metrics inherit log retention and sampling, which is the wrong foundation for a paging alert.
+Two things worth deriving as **log-based metrics** in CDKTF rather than instrumenting by hand, because they are cheap and rarely change: outreach failure reasons, and stale-snapshot rejections. Everything in §10.3 that drives an alert should be a real metric, not a log-derived one — log-based metrics inherit log retention and sampling, which is the wrong foundation for a paging alert.
 
 **Sentry** stays the exception channel: unhandled errors, tagged with `tenant_id` and `correlation_id` so a Sentry issue links straight back to the audit trail. Sentry alerts on *new* and *regressed* issues; Cloud Monitoring alerts on *conditions*. Do not duplicate one in the other.
 
@@ -430,18 +387,16 @@ Two things worth deriving as **log-based metrics** in CDKTF rather than instrume
 
 Scheduled jobs, each writing its own audit events and feeding `attestation.reconciliation.mismatch`:
 
-1. **Inbound folder ↔ batch registry** — catches lost upload events (v2 §6.5.2).
-2. **Batch disposition counts ↔ manifest counts** — the equation in §6, per batch.
-3. **Approved items ↔ slice writes ↔ OV outcomes** — every approved item reached a terminal, recorded state.
-4. **Task states ↔ `next_attestation_date`** — the clock and the workflow agree.
-5. **Hot audit rows ↔ archived audit rows** — nothing lost in aging.
-6. **Outbox ↔ published events** — nothing committed but never published.
+1. **Approved items ↔ slice writes ↔ OV outcomes** — every approved item reached a terminal, recorded state.
+2. **Task states ↔ `next_attestation_date`** — the clock and the workflow agree.
+3. **Hot audit rows ↔ archived audit rows** — nothing lost in aging.
+4. **Outbox ↔ published events** — nothing committed but never published.
 
 ---
 
 ## 11. Operator surface and runbooks
 
-Operators get authorized, audited actions and **no direct database access**. The catalogue, carried from v1 §14.3: replay an outbox event; retry or quarantine vendor data; retry a release item **with its original idempotency key**; recover an expired worker lease; reconcile an uncertain MDM or Terminations result; rebuild reporting; pause a tenant, source, notification stream, or sync worker.
+Operators get authorized, audited actions and **no direct database access**. The catalogue, carried from v1 §14.3: replay an outbox event; retry a release item **with its original idempotency key**; recover an expired worker lease; reconcile an uncertain MDM or Terminations result; rebuild reporting; pause a tenant, notification stream, or sync worker.
 
 Two rules to state explicitly in the design doc:
 
@@ -456,7 +411,6 @@ The audit trail is a feature and needs tests, not just presence checks. Minimum 
 
 - For a full happy-path attestation, assert the **exact expected event sequence** — the story is complete and in order.
 - Assert that a failed audit write **rolls back** the business mutation (v1 §14.2's listed case).
-- Assert the batch reconciliation equation balances on a synthetic batch containing every disposition type.
 - Assert that a cross-tenant read of `audit_events` returns nothing, from every path: API, report, replay, export.
 - Assert append-only: attempt an update and a delete through the data layer; both must be impossible, not merely unused.
 - Assert that a bulk action with a deliberate partial failure produces one bulk event plus per-item events with truthful outcomes.
@@ -479,14 +433,14 @@ The audit trail is a feature and needs tests, not just presence checks. Minimum 
 | A-8 | **No metrics library in `api-layer`** (§10.0 gap 1) — every counter in §10.3 needs a path to exist. Recommendation: `quarkus-micrometer` with an OTLP registry through the OTel Collector we already run. | Engineering |
 | A-9 | **JSON console logging is off** in `api-layer` (§10.0 gap 2) — until it is on, `correlation_id`-scoped log search does not work. | Engineering |
 | A-10 | **600s DAL read timeout with no circuit breaker** (§10.0 gap 3) — use the `quarkus-smallrye-fault-tolerance` already on the classpath rather than inheriting the default. | Engineering |
-| A-11 | **Trace context across Pub/Sub and Cloud Tasks** (§10.2) — neither propagates `traceparent` automatically; publisher and consumer work is required or every trace ends at the queue. | Engineering (ingestion design doc) |
+| A-11 | **Trace context across Pub/Sub and Cloud Tasks** (§10.2) — neither propagates `traceparent` automatically; publisher and consumer work is required or every trace ends at the queue. | Engineering (backend design doc) |
 | A-12 | **Metric label cardinality** — `tenant_id` yes, `practitioner_id` never. Worth stating as a review rule before the first counter ships. | Engineering |
 
 ---
 
 ## Appendix A — One obligation, end to end
 
-Dr. Priya Patel, Harbor Health Plan, Q3 2026 obligation. She is listed at three locations but works only at Oak Street, and her phone number is wrong. Candor independently disputes her primary specialty. This is the trail the system must leave.
+Dr. Priya Patel, Harbor Health Plan, Q3 2026 obligation. She is listed at three locations but works only at Oak Street, and her phone number is wrong. This is the trail the system must leave.
 
 **Correlation id for everything below:** `harbor-health:prac_8f21c4:2026Q3`
 
@@ -497,35 +451,25 @@ Dr. Priya Patel, Harbor Health Plan, Q3 2026 obligation. She is listed at three 
 | 3 | 07-16 03:04 | `IDENTITY_COMPUTED` | `WORKER` / api-layer@2026.07.14-2 | `harbor-health:prac_8f21c4:2026Q3` |
 | 4 | 07-16 03:04 | `TASK_CREATED` | `WORKER` | `task_id=t_9c11`, due 2026-08-15, clock rule `BACKFILL_STAGGERED` |
 | 5 | 07-16 06:00 | `OUTREACH_SENT` | `WORKER` / outreach | tier `T-30`, template `attest_reminder_v2`, SendGrid ref `sg_88a1` |
-| 6 | 08-01 04:00 | `EXPORT_FILE_WRITTEN` | `SCHEDULER` / vendor-export | export batch `E-2026-08-01`, 3,914 rows, SHA `9f2c…`, `gs://…/outbound/E-2026-08-01.csv` |
-| 7 | 08-08 06:00 | `OUTREACH_SENT` | `WORKER` | tier `T-7` |
-| 8 | 08-11 10:14 | `PORTAL_SESSION_STARTED` | `PRACTITIONER` / portal_u_3312 | auth `magic_link`, resolved `prac_8f21c4`, 1 practitioner visible |
-| 9 | 08-11 10:14 | `FORM_PREFILLED` | `PRACTITIONER` | OV snapshot `v_44197`, read at 10:14:02 — **the evidence of what she was shown** |
-| 10 | 08-11 10:21 | `ATTESTATION_SUBMITTED` | `PRACTITIONER` | snapshot `v_44197` still current; 3 deltas |
-| 11 | 08-11 10:21 | `STAGED_ITEM_CREATED` ×3 | `WORKER` | `ci_a1` phone UPDATE `(555) 0100 → (555) 0199`; `ci_a2` location REMOVE River Road; `ci_a3` location REMOVE Hilltop. All `source_id=portal-attestation:harbor-health`, version 1 |
-| 12 | 08-11 10:21 | `TASK_STATUS_CHANGED` | `WORKER` | OPEN → **SUBMITTED** (attester's job done — *not* workflow complete, D2-09) |
-| 13 | 08-11 10:21 | `CLOCK_ADVANCED` | `WORKER` | `next_attestation_date`: 2026-08-15 → 2026-11-09 (submission + 90) |
-| 14 | 08-14 23:47 | `MANIFEST_RECEIVED` | `EXTERNAL_VENDOR` / sftp id `candor-prod` | vendor batch `CD-4471`, refs export `E-2026-08-01`, declared SHA `1a77…`, 3,914 rows |
-| 15 | 08-14 23:47 | `BATCH_REGISTERED` → `CHECKSUM_VERIFIED` → `ROWCOUNT_VERIFIED` → `SCHEMA_VERSION_RESOLVED` | `WORKER` / ingestion | schema `candor.v3` via adapter |
-| 16 | 08-14 23:52 | `ROW_DISPOSITIONED` | `WORKER` | row 41208, `primary_phone` → `(555) 0199`, disposition **NO_OP** (Candor agrees with what she just attested) |
-| 17 | 08-14 23:52 | `ROW_DISPOSITIONED` | `WORKER` | row 41209, `primary_specialty` `Cardiology → Interventional Cardiology`, disposition **ACTIONABLE** |
-| 18 | 08-14 23:52 | `IDENTITY_RESOLVED` | `WORKER` | NPI `1477…` → `prac_8f21c4`, method `npi_crosswalk_exact` |
-| 19 | 08-14 23:52 | `STAGED_ITEM_CREATED` | `WORKER` | `ci_b1`, `source_id=candor:harbor-health` |
-| 20 | 08-14 23:58 | `BATCH_COMPLETED` | `WORKER` | 3,914 = 2,806 no-op + 41 dup/stale + 12 excluded + 3 quarantined + 8 prev-rejected + 1,044 actionable ✅ |
-| 21 | 08-18 09:02 | `ITEM_ASSIGNED` ×4 | `PAYER_REVIEWER` / admin_u_77 | `ci_a1..a3`, `ci_b1` → reviewer admin_u_91 |
-| 22 | 08-18 11:30 | `ITEM_APPROVED` | `PAYER_REVIEWER` / admin_u_91, roles `[payer_reviewer]` | `ci_a1` phone, version 1 → 2 |
-| 23 | 08-18 11:31 | `ITEM_APPROVED` ×2 | `PAYER_REVIEWER` / admin_u_91 | `ci_a2`, `ci_a3` location removals |
-| 24 | 08-18 11:34 | `ITEM_REJECTED` | `PAYER_REVIEWER` / admin_u_91 | `ci_b1`, reason code `CONTRADICTED_BY_PROVIDER`, text *"provider attested Cardiology on 08-11"* |
-| 25 | 08-18 11:34 | `REJECTED_RECOMMENDATION_RECORDED` | `WORKER` | `(harbor-health, prac_8f21c4, primary_specialty, UPDATE, "interventional cardiology")` — future Candor batches match and suppress (D2-07) |
-| 26 | 08-18 11:40 | `SYNC_REQUESTED` | `PAYER_REVIEWER` / admin_u_91 | mode BULK, 3 items, `release_id=r_5501` |
-| 27 | 08-18 11:40 | `SLICE_UPSERTED` | `WORKER` / sync | `source_id=portal-attestation:harbor-health`, `crosswalk_id=1477…`, `primary_phone=(555) 0199` |
-| 28 | 08-18 11:41 | `TERMINATION_REQUESTED` ×2 | `WORKER` / sync | scope `PRACTITIONER_LOCATION`, River Road and Hilltop, effective 2026-08-31 |
-| 29 | 08-18 11:43 | `OV_OUTCOME_VERIFIED` | `MDM_ENGINE` | read-back: `primary_phone=(555) 0199`, winner `portal-attestation:harbor-health`, config version *(see §9 — **not currently recorded**)* |
-| 30 | 08-18 11:43 | **`APPROVED_VALUE_DID_NOT_SURVIVE`** | `MDM_ENGINE` | `ci_a2`'s address normalization lost to a higher-ranked roster value on `address_line_2`; approved value and OV differ, recorded plainly |
-| 31 | 08-18 11:44 | `SYNC_ITEM_COMPLETED` ×3 | `WORKER` | release `r_5501` terminal |
-| 32 | 09-01 02:00 | `CLIENT_EXPORT_GENERATED` → `DELIVERED` | `SCHEDULER` / client-export | 3,776 attested practitioners, SHA `c30b…`, manifest written last |
+| 6 | 08-08 06:00 | `OUTREACH_SENT` | `WORKER` | tier `T-7` |
+| 7 | 08-11 10:14 | `PORTAL_SESSION_STARTED` | `PRACTITIONER` / portal_u_3312 | auth `magic_link`, resolved `prac_8f21c4`, 1 practitioner visible |
+| 8 | 08-11 10:14 | `FORM_PREFILLED` | `PRACTITIONER` | OV snapshot `v_44197`, read at 10:14:02 — **the evidence of what she was shown** |
+| 9 | 08-11 10:21 | `ATTESTATION_SUBMITTED` | `PRACTITIONER` | snapshot `v_44197` still current; 3 deltas |
+| 10 | 08-11 10:21 | `STAGED_ITEM_CREATED` ×3 | `WORKER` | `ci_a1` phone UPDATE `(555) 0100 → (555) 0199`; `ci_a2` location REMOVE River Road; `ci_a3` location REMOVE Hilltop. All `source_id=portal-attestation:harbor-health`, version 1 |
+| 11 | 08-11 10:21 | `TASK_STATUS_CHANGED` | `WORKER` | OPEN → **SUBMITTED** (attester's job done — *not* workflow complete, D2-09) |
+| 12 | 08-11 10:21 | `CLOCK_ADVANCED` | `WORKER` | `next_attestation_date`: 2026-08-15 → 2026-11-09 (submission + 90) |
+| 13 | 08-18 09:02 | `ITEM_ASSIGNED` ×3 | `PAYER_REVIEWER` / admin_u_77 | `ci_a1..a3` → reviewer admin_u_91 |
+| 14 | 08-18 11:30 | `ITEM_APPROVED` | `PAYER_REVIEWER` / admin_u_91, roles `[payer_reviewer]` | `ci_a1` phone, version 1 → 2 |
+| 15 | 08-18 11:31 | `ITEM_APPROVED` ×2 | `PAYER_REVIEWER` / admin_u_91 | `ci_a2`, `ci_a3` location removals |
+| 16 | 08-18 11:40 | `SYNC_REQUESTED` | `PAYER_REVIEWER` / admin_u_91 | mode BULK, 3 items, `release_id=r_5501` |
+| 17 | 08-18 11:40 | `SLICE_UPSERTED` | `WORKER` / sync | `source_id=portal-attestation:harbor-health`, `crosswalk_id=1477…`, `primary_phone=(555) 0199` |
+| 18 | 08-18 11:41 | `TERMINATION_REQUESTED` ×2 | `WORKER` / sync | scope `PRACTITIONER_LOCATION`, River Road and Hilltop, effective 2026-08-31 |
+| 19 | 08-18 11:43 | `OV_OUTCOME_VERIFIED` | `MDM_ENGINE` | read-back: `primary_phone=(555) 0199`, winner `portal-attestation:harbor-health`, config version *(see §9 — **not currently recorded**)* |
+| 20 | 08-18 11:43 | **`APPROVED_VALUE_DID_NOT_SURVIVE`** | `MDM_ENGINE` | `ci_a2`'s address normalization lost to a higher-ranked roster value on `address_line_2`; approved value and OV differ, recorded plainly |
+| 21 | 08-18 11:44 | `SYNC_ITEM_COMPLETED` ×3 | `WORKER` | release `r_5501` terminal |
+| 22 | 09-01 02:00 | `CLIENT_EXPORT_GENERATED` → `DELIVERED` | `SCHEDULER` / client-export | 3,776 attested practitioners, SHA `c30b…`, manifest written last |
 
-**What this trail proves, and where it still cannot.** Events 9, 10, 24, and 29 answer "what was she shown, what did she claim, why was the vendor overruled, and what actually landed." Event 30 answers the question that otherwise generates an angry client call. Event 29's missing config version is §9's gap — the one thing in this whole story we cannot currently evidence.
+**What this trail proves, and where it still cannot.** Events 8, 9, and 19 answer "what was she shown, what did she claim, and what actually landed." Event 20 answers the question that otherwise generates an angry client call. Event 19's missing config version is §9's gap — the one thing in this whole story we cannot currently evidence.
 
 **A single audit row, in full:**
 
@@ -533,33 +477,31 @@ Dr. Priya Patel, Harbor Health Plan, Q3 2026 obligation. She is listed at three 
 {
   "audit_id": "9a1f2e7c-…",
   "tenant_id": "harbor-health",
-  "occurred_at": "2026-08-18T11:34:12.882Z",
-  "recorded_at": "2026-08-18T11:34:12.906Z",
+  "occurred_at": "2026-08-18T11:30:41.882Z",
+  "recorded_at": "2026-08-18T11:30:41.906Z",
   "stage": "STAGE_4",
-  "event_type": "ITEM_REJECTED",
+  "event_type": "ITEM_APPROVED",
   "outcome": "SUCCEEDED",
   "correlation_id": "harbor-health:prac_8f21c4:2026Q3",
   "task_id": "t_9c11",
-  "batch_id": "b_01J9CD4471",
-  "row_id": 41209,
-  "change_item_id": "ci_b1",
-  "change_item_version": 1,
+  "submission_id": "sub_2c90",
+  "change_item_id": "ci_a1",
+  "change_item_version": 2,
   "review_action_id": "ra_31f8",
   "entity_type": "CHANGE_ITEM",
-  "entity_id": "ci_b1",
+  "entity_id": "ci_a1",
   "actor_type": "PAYER_REVIEWER",
   "actor_id": "admin_u_91",
   "actor_display": "J. Alvarez",
   "actor_roles": ["payer_reviewer"],
   "on_behalf_of_practitioner_id": null,
-  "source_id": "candor:harbor-health",
-  "attribute": "primary_specialty",
+  "source_id": "portal-attestation:harbor-health",
+  "attribute": "primary_phone",
   "operation": "UPDATE",
-  "before_value": "cardiology",
-  "after_value": "interventional cardiology",
-  "reason_code": "CONTRADICTED_BY_PROVIDER",
-  "reason_text": "provider attested Cardiology on 08-11",
-  "disposition": null,
+  "before_value": "(555) 0100",
+  "after_value": "(555) 0199",
+  "reason_code": null,
+  "reason_text": null,
   "error_code": null,
   "request_id": "req_7d21…",
   "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
@@ -568,13 +510,13 @@ Dr. Priya Patel, Harbor Health Plan, Q3 2026 obligation. She is listed at three 
 }
 ```
 
-Note `before_value` / `after_value` are the **normalized** forms (§5) — the same normalization, at the same version, that the `rejected_recommendations` match key in event 25 uses. That is what makes the next batch's suppression work.
+Note `before_value` / `after_value` are the **normalized** forms (§5), at a recorded normalization version, so historical comparisons stay meaningful.
 
 ---
 
 ## Appendix B — Query cookbook
 
-Answers to the ten questions in §2, as queries someone can actually run.
+Answers to the eight questions in §2, as queries someone can actually run.
 
 **Q1 — the whole story for one obligation:**
 ```sql
@@ -594,16 +536,7 @@ WHERE tenant_id = @tenant AND correlation_id = @correlation_id
   AND event_type = 'ATTESTATION_SUBMITTED';
 ```
 
-**Q3 — why a recommendation was rejected:**
-```sql
-SELECT occurred_at, actor_display, reason_code, reason_text,
-       batch_id, row_id, source_id, before_value, after_value
-FROM audit_events
-WHERE tenant_id = @tenant AND change_item_id = @change_item_id
-  AND event_type = 'ITEM_REJECTED';
-```
-
-**Q5 — approved but not in the Golden record:**
+**Q4 — approved but not in the Golden record:**
 ```sql
 SELECT occurred_at, change_item_id, attribute,
        after_value      AS approved_value,
@@ -615,17 +548,7 @@ WHERE tenant_id = @tenant
   AND occurred_at BETWEEN @from AND @to;
 ```
 
-**Q6 — prove a batch is fully accounted for:**
-```sql
-SELECT disposition, COUNT(*) AS rows
-FROM audit_events
-WHERE tenant_id = @tenant AND batch_id = @batch_id
-  AND event_type = 'ROW_DISPOSITIONED'
-GROUP BY disposition;
--- must sum to the manifest count recorded on MANIFEST_RECEIVED
-```
-
-**Q8 — two-business-day evidence for one attestation:**
+**Q6 — two-business-day evidence for one attestation:**
 ```sql
 SELECT
   MIN(IF(event_type = 'ATTESTATION_SUBMITTED',   occurred_at, NULL)) AS clock_start,
@@ -635,7 +558,7 @@ FROM audit_events
 WHERE tenant_id = @tenant AND correlation_id = @correlation_id;
 ```
 
-**Q9 — did anyone act outside the workflow:**
+**Q7 — did anyone act outside the workflow:**
 ```sql
 SELECT occurred_at, event_type, actor_id, actor_display, reason_text, entity_type, entity_id
 FROM audit_events
@@ -646,18 +569,17 @@ WHERE tenant_id = @tenant
 ORDER BY occurred_at;
 ```
 
-**Q10 — what is stuck right now:**
+**Q8 — what is stuck right now:**
 ```sql
-SELECT batch_id, disposition, reason_code, COUNT(*) AS rows,
-       MIN(occurred_at) AS oldest
+SELECT release_id, change_item_id, error_code, MIN(occurred_at) AS since
 FROM audit_events
-WHERE tenant_id = @tenant AND event_type = 'ROW_QUARANTINED'
+WHERE tenant_id = @tenant AND event_type = 'SYNC_ITEM_QUARANTINED_POISON'
   AND NOT EXISTS (
     SELECT 1 FROM audit_events r
-    WHERE r.tenant_id = audit_events.tenant_id AND r.row_id = audit_events.row_id
-      AND r.event_type IN ('QUARANTINE_RESOLVED', 'QUARANTINE_CLOSED_BY_OPERATOR'))
-GROUP BY batch_id, disposition, reason_code
-ORDER BY oldest;
+    WHERE r.tenant_id = audit_events.tenant_id AND r.change_item_id = audit_events.change_item_id
+      AND r.event_type IN ('SYNC_ITEM_COMPLETED', 'QUARANTINE_CLOSED_BY_OPERATOR'))
+GROUP BY release_id, change_item_id, error_code
+ORDER BY since;
 ```
 
 **The operational counterparts** — same investigation, different tool:
@@ -667,10 +589,10 @@ ORDER BY oldest;
 jsonPayload.correlation_id="harbor-health:prac_8f21c4:2026Q3"
 severity>=INFO
 
-# Cloud Logging — everything that went wrong in one batch
-jsonPayload.batch_id="b_01J9CD4471" severity>=WARNING
+# Cloud Logging — everything that went wrong in one release
+jsonPayload.release_id="r_5501" severity>=WARNING
 
-# Cloud Trace — find the slow span in one ingestion run
+# Cloud Trace — find the slow span in one sync run
 trace_id from the audit row's trace_id field → open in Cloud Trace
 
 # Sentry — exceptions for one tenant since a release

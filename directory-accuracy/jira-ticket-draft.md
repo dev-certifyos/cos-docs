@@ -11,16 +11,16 @@
 
 **Description (proposed):**
 
-Following the 2026-09-08 product call, the Candor recommendation workflow is decoupled from the attestation module (decision D2-38 in the source-of-truth doc). Candor is not an input lane into attestation review — it is an independent directory-accuracy program with its own population, cadence, staging, review, and release path.
+Following the 2026-09-08 product call (decision D2-38 in the source-of-truth doc), Candor is an independent directory-accuracy program with its own population, cadence, staging, review, and release path.
 
 Scope of the program end to end:
 
 - Monthly (configurable) export per tenant: NPI selection via a tenant-configured query filter, file delivered to the vendor over the existing shared SFTP platform (Candor account `candor-health` is already provisioned — TS-111546).
 - Ingestion of the vendor's response file: batch registry for duplicate shielding, chunked streaming parse through a vendor adapter, one disposition per row, quarantine over guessing, previously-rejected suppression.
-- Review APIs: endpoints to query ingested recommendations and mark them approved / rejected (with reason) / skipped. The reviewer UI lives in the Attestation Module UI surface and consumes these endpoints — this story delivers APIs only.
+- Review APIs: endpoints to query ingested recommendations and mark them approved / rejected (with reason) / skipped. The reviewer UI is the PDM reviewer UI, a separate front-end application that consumes these endpoints — this story delivers APIs only.
 - Sync Latest release: endpoints to query approved rows and release them to the Golden record under the tenant-scoped source `candor:{tenantId}` (decision D2-37 — rebuild the full slice from a released-items ledger on every sync, never sparse-write).
 
-Out of scope: any coupling to attestation tasks or cycles; Golden-record engine changes (extend-only); auto-approval (manual review only in MVP); any reviewer UI (built in the Attestation Module UI surface, not here).
+Out of scope: coupling to any other workflow; Golden-record engine changes (extend-only); auto-approval (manual review only in MVP); any reviewer UI (built in the PDM reviewer UI, not here).
 
 ---
 
@@ -29,8 +29,8 @@ Out of scope: any coupling to attestation tasks or cycles; Golden-record engine 
 ### 1. Spike — design doc for the directory-accuracy Candor lane
 
 - **Summary:** Spike: design doc — directory accuracy Candor lane (export, ingestion, review APIs, release)
-- **What:** author the design doc per the standard design-doc template and house style. Rework the retired SFTP-exchange and ingestion drafts into the decoupled shape.
-- **Must decide inside the doc:** whether this is its own service or part of an existing module's backend; selection-query configuration format/storage/injection safety (open item O-17); skip semantics and cross-cadence re-send (O-18); release path — own vs shared Sync Latest machinery (O-19); inbound delivery mechanism (e.g. manifest JSON vs filename identity); vendor contract proposal for the Candor call (O-1) including large-file clauses (CSV/NDJSON above ~500k rows, gzip, declared row counts).
+- **What:** author the design doc per the standard design-doc template and house style.
+- **Must decide inside the doc:** whether this is its own service or part of an existing backend; selection-query configuration format/storage/injection safety (open item O-17); skip semantics and cross-cadence re-send (O-18); release path — own vs shared Sync Latest machinery (O-19); inbound delivery mechanism (e.g. manifest JSON vs filename identity); vendor contract proposal for the Candor call (O-1) including large-file clauses (CSV/NDJSON above ~500k rows, gzip, declared row counts).
 - **Exit criteria:** doc reviewed and approved by two people; open questions either closed or assigned an owner; implementation subtask estimates re-baselined.
 - **Estimate:** 8 SP
 
@@ -59,7 +59,7 @@ Out of scope: any coupling to attestation tasks or cycles; Golden-record engine 
 
 - **Summary:** Review/approval endpoints and release of approved rows to the Golden record
 - **What:**
-  - Review APIs: query endpoints over ingested recommendations (filters, evidence fields); approve / reject-with-mandatory-reason / skip actions, one decision per row enforced by constraint; rejected rows feed the suppression table; server-side tenant isolation. Consumed by the Attestation Module UI surface.
+  - Review APIs: query endpoints over ingested recommendations (filters, evidence fields); approve / reject-with-mandatory-reason / skip actions, one decision per row enforced by constraint; rejected rows feed the suppression table; server-side tenant isolation. Consumed by the PDM reviewer UI.
   - Sync Latest release: endpoint to query approved rows and release them — released-items ledger, rebuild the full slice per (source, practitioner) and write via DAL UPSERT under `candor:{tenantId}` (never sparse-write); per-tenant survivorship ranking entry for the new source (unranked sources fall to rank 997 and lose to roster); release status reporting.
 - **Depends on:** subtasks 1, 4.
 - **Estimate:** 6 SP — provisional
@@ -78,11 +78,11 @@ Out of scope: any coupling to attestation tasks or cycles; Golden-record engine 
 ## Totals and notes for review
 
 - **Total:** 35 SP (35 h) — spike is 8 SP; implementation estimates re-baseline after the design doc.
-- Existing ticket-breakdown rows re-homed here (Jira updated once the design doc is final, per standing rule): DA-14 (SFTP onboarding/pickup), DA-15 (adapter framework), DA-16 (disposition engine), DA-17 (batch ops tooling), DA-18 (review queue APIs), and the export job that never had a ticket.
+- Earlier spike tickets re-homed here (Jira updated once the design doc is final): DA-14 (SFTP onboarding/pickup), DA-15 (adapter framework), DA-16 (disposition engine), DA-17 (batch ops tooling), DA-18 (review queue APIs), and the export job that never had a ticket.
 
 ## Publishing decisions (answered 2026-09-09)
 
-1. Epic: CP-35879 (same epic as the attestation work).
+1. Epic: CP-35879.
 2. Issue types: parent Story CP-39602 + six Sub-tasks.
 3. Ownership: PDM pod.
 4. All six subtasks created up front; estimates re-baseline after the spike.

@@ -10,7 +10,7 @@ to/org-xyz/org-xyz_org-xyz-candor-2026-09-001_CB-2026-09-001_20260915.csv.manife
 
 Filename legs: `<tenantId>_<exportBatchId>_<yyyyMMdd>.csv` out; `<tenantId>_<exportBatchRef>_<candorBatchId>_<yyyyMMdd>.csv` back. `exportBatchRef` = our export batch id echoed verbatim (`org-xyz-candor-2026-09-001`) — the one non-negotiable filename leg.
 
-## The export (schema `certify-export-v1`, 31 columns) — proposal §4.3
+## The export (schema `certify-export-v1`, 30 columns) — proposal §4.3
 
 One row per practitioner per practice location; practitioner-level fields repeat per location row. 7 practitioners, 8 rows. Every row carries the two ids we ask Candor to echo back: `certify_practitioner_id` and `certify_location_id` (proposal §3.4).
 

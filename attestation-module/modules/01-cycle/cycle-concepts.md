@@ -124,7 +124,7 @@
 ### Staging area / staging boundary
 
 - A holding zone where incoming data lives **before it is approved** to touch the system of record.
-- In this program: attestation submissions and vendor recommendations stage in module tables; only reviewed/approved changes ever move toward the golden record.
+- In this program: attestation submissions stage in module tables; only reviewed/approved changes ever move toward the golden record.
 
 ### Kill switch
 
@@ -211,7 +211,7 @@
 ### The 90-day clock / the 48-hour rule
 
 - **90-day rule:** each provider's directory data must be verified at least every 90 days — the reason this module exists.
-- **2-business-day ("48-hour") rule:** once the plan *receives* changed information (an attestation with edits), the directory must be updated within 2 business days. Attaches to provider attestations, not vendor recommendations.
+- **2-business-day ("48-hour") rule:** once the plan *receives* changed information (an attestation with edits), the directory must be updated within 2 business days. Attaches to provider attestations.
 
 ### Obligation / task / cycle
 
@@ -559,7 +559,7 @@ First module document. Inputs: SoT v2 + the instruction file. Exports:
 | Reminder tiers as `sendKey` suffixes, template keys, `expiresAt` rule, atomic-opening guarantee (*Contracts*) | Backend (5), Portal (2, deep links), Smart Outreach Service (template registration) |
 | The `attestation_outbox` table + its mapping to the outreach commands (`OUTREACH_SCHEDULE` → `SCHEDULE_SENDS`, `OUTREACH_CANCEL` → `CANCEL_SENDS`; `commandId` = outbox id; ordering key = `cancellationKey`; recipient upserts are `pdm-platform`'s, D14) (*Contracts* 4b, 0b) | Backend (5, relay + outcome consumer), Database (6, DDL), Portal (2, cancel on submission) |
 | The outcome → audit-event mapping (*Contracts* step 5) | Backend (5, outcome consumer), Database (6, audit DDL) |
-| The `attestation-module-config` entry (*Contracts*)                      | Backend (5), Ingestion (4)                    |
+| The `attestation-module-config` entry (*Contracts*)                      | Backend (5)                                   |
 | The audit events for Stages 0–1 (*Audit trail*)                          | Database (6), Operations                      |
 
 ## Design rationale — anticipated questions
@@ -569,7 +569,7 @@ First module document. Inputs: SoT v2 + the instruction file. Exports:
 - Cloud Tasks refuses a duplicate task name at creation — Pub/Sub has no equivalent; it is at-least-once, so duplicates always reach the handler.
 - Point-to-point work, not an event broadcast; per-task retry state and pacing come free.
 - The DLQ would hold chunks whose obligations are still `SCHEDULED` — exactly what the next scan re-finds by itself.
-- Rule of thumb: Pub/Sub for events you cannot regenerate (the directory accuracy service's vendor uploads, with a real DLQ — formerly doc 4); Cloud Tasks for work you can re-derive.
+- Rule of thumb: Pub/Sub for events you cannot regenerate (externally produced events, with a real DLQ); Cloud Tasks for work you can re-derive.
 
 **"Why not store the dates in the OV `data` JSON, or write them through the practitioner update endpoints?"**
 

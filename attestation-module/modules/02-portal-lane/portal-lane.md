@@ -355,16 +355,27 @@ Response `200`:
     "snapshotVersion": "v1:9f3ac2…",
     "mode": "EDIT",
     "fields": [
-      { "field": "providerName",         "value": "Dr. Asha Patel",  "editable": true  },
-      { "field": "npi",                  "value": "1234567890",      "editable": false },
-      { "field": "telephoneNumbers",     "value": [ { "entryKey": "office-1", "number": "555-0100" } ], "editable": true },
-      { "field": "acceptingNewPatients", "value": true,              "editable": true  }
+      { "field": "name",      "value": { "prefix": "Dr.", "firstName": "Asha", "lastName": "Patel", "suffix": null }, "editable": true },
+      { "field": "npi",       "value": "1234567890", "editable": false },
+      { "field": "languages", "value": [ { "language": "English", "isPrimary": true } ], "editable": true },
+      { "field": "practiceLocations", "editable": true, "value": [
+        {
+          "entryKey": "gpl-41c9…",
+          "group": { "npi": "1987654321", "name": "Lakeside Medical Group", "tin": "12-3456789" },
+          "website": "https://lakeside.example",
+          "phone": "555-0100",
+          "fax": "555-0101",
+          "serviceAddress": { "addressLine1": "12 Lake Rd", "addressLine2": null, "city": "Columbus", "state": "OH", "zip": "43215" },
+          "acceptingNewPatients": "Accepting New",
+          "handicapAccessible": true
+        }
+      ] }
     ]
   }
 }
 ```
 
-- **The field set is fixed** (Product Spec S2 §1.5.9, restated in v2 §6.7; per-field source map in *Prefill field map* below): provider name · group affiliation · street address(es) · telephone number(s) · website URL · specialty · accepting-new-patients · cultural/linguistic capabilities · disability accommodations · telehealth availability · NPI (display-only). Fax and office hours excluded (D2-25).
+- **The field set is final** (confirmed 2026-09-11, v2 D2-39; per-field source in *Prefill field map* below). Practitioner block: name (prefix, first, last, suffix) · NPI (display-only) · languages · cultural competency · primary email · hospital affiliations (name, type) · telehealth availability · area of focus · specialties · practitioner role. Practice-location block, one entry per practitioner-at-location row: group (NPI, name, TIN) · website · phone · fax · service address · accepting new patients · handicap accessible. Office hours excluded (D2-25); fax included (D2-25 amended 2026-09-11).
 - `mode` comes from the tenant's `attestation-module-config` entry (`portalMode`) — **one mode per tenant** (D13; *Form modes are tenant-level*, below). Per-field `editable` comes from the same config; the Portal team maps both onto their existing renderer flags.
 - Nothing plan-related is read or stored anywhere; the mode that was *applied* becomes evidence at submission (`appliedMode`).
 - **Audit written in this step:** `FORM_PREFILLED` — the snapshot version, the OV read time, and the **field values themselves**; the evidence of *what the attester was shown*. Written once per distinct `(taskId, snapshotVersion)` — repeat renders of an unchanged form are not re-logged (details in the `snapshot_version` subsection).
@@ -381,11 +392,21 @@ Request:
   "outcome": "UPDATED",
   "deltas": [
     {
-      "field": "telephoneNumbers",
+      "field": "practiceLocations",
       "operation": "UPDATE",
-      "entryKey": "office-1",
-      "oldValue": { "number": "555-0100" },
-      "newValue": { "number": "555-0199" }
+      "entryKey": "gpl-41c9…",
+      "oldValue": {
+        "group": { "npi": "1987654321", "name": "Lakeside Medical Group", "tin": "12-3456789" },
+        "website": "https://lakeside.example", "phone": "555-0100", "fax": "555-0101",
+        "serviceAddress": { "addressLine1": "12 Lake Rd", "addressLine2": null, "city": "Columbus", "state": "OH", "zip": "43215" },
+        "acceptingNewPatients": "Accepting New", "handicapAccessible": true
+      },
+      "newValue": {
+        "group": { "npi": "1987654321", "name": "Lakeside Medical Group", "tin": "12-3456789" },
+        "website": "https://lakeside.example", "phone": "555-0199", "fax": "555-0101",
+        "serviceAddress": { "addressLine1": "12 Lake Rd", "addressLine2": null, "city": "Columbus", "state": "OH", "zip": "43215" },
+        "acceptingNewPatients": "Accepting New", "handicapAccessible": true
+      }
     }
   ],
   "attester": { "id": "pu-8842…", "type": "PROVIDER", "displayName": "Asha Patel" },
@@ -395,8 +416,10 @@ Request:
 
 - `outcome`: `NO_CHANGE | UPDATED | FLAGGED`. NO_CHANGE sends no `deltas`; the submission record itself is reviewer-visible (D2-09).
 - `attester.type`: `PROVIDER | ADMIN` — an admin submission records on-behalf-of.
-- Deltas carry old and new values — the reviewer sees what changed without re-deriving it. `entryKey` (which entry inside a list-valued field, e.g. which of three phone numbers) is null for scalar fields.
-- **For list-valued fields, `oldValue`/`newValue` carry the full entry object** — the whole address or phone entry, not just the changed field. `entryKey` is a routing id, valid only within one prefill/submit conversation; the release path needs the merge engine's grouping key (`ARRAY_FIELD_GROUPING_KEYS`, e.g. `[address1, city, state, zipcode]` for addresses), which the sync worker derives **from the entry's values** at release — doc 5 owns that derivation (v2 §6.7.1 F-2; the attested level per attribute is O-13's decision, and this rule survives either answer).
+- Deltas carry old and new values — the reviewer sees what changed without re-deriving it. `entryKey` (which entry inside a list-valued field, e.g. which of three practice locations, or which hospital affiliation) is null for scalar fields.
+- **For list-valued fields, `oldValue`/`newValue` carry the full entry object** — the whole practice-location entry or hospital-affiliation entry, not just the changed attribute. `entryKey` is a routing id, valid only within one prefill/submit conversation.
+  - For `practiceLocations` the `entryKey` is the `group_practitioner_locations` row id the prefill served, so the release path writes straight back to that row (and to its service address row) — no grouping key needed.
+  - For Golden-record list fields (`languages`, `hospitalAffiliations`, `practitionerRoles`, `practitionerSpecializedTraining`) the release path needs the merge engine's grouping key (`ARRAY_FIELD_GROUPING_KEYS`), which the sync worker derives **from the entry's values** at release — doc 5 owns that derivation.
 - `routingContext.channel` (`PORTAL` | `DIRECT_API` — which door the submission came through, for audit and reporting; never the source tag, which is derived server-side from the caller's registration).
 - **`attestedAt` is stamped by the server at accept time** — the request carries no timestamp; client clocks are never evidence. The stored value doubles as the task's `submittedAt`.
 - **The request carries no plan information** — plan = tenant for this module (D13). The mode that governed the form (`appliedMode`) is derived server-side from the tenant config at accept time and stored as evidence; a caller can no more claim its mode than its tenant.
@@ -455,9 +478,10 @@ All writes commit or fail **together** — the module's own database, same shape
                "attesterId": "pu-8842…", "attesterType": "PROVIDER", "attestedAt": "2026-10-10T17:21:04Z",
                "source": "portal-attestation" } },
     { "table": "attestation_staged_items", "operation": "INSERT",
-      "row": { "tenantId": "org-xyz", "taskId": "task-7f3a…", "attribute": "telephoneNumbers",
-               "operation": "UPDATE", "entryKey": "office-1", "oldValue": { "number": "555-0100" },
-               "newValue": { "number": "555-0199" }, "source": "portal-attestation" } },
+      "row": { "tenantId": "org-xyz", "taskId": "task-7f3a…", "attribute": "practiceLocations",
+               "operation": "UPDATE", "entryKey": "gpl-41c9…",
+               "oldValue": { "…full practice-location entry…": "phone 555-0100" },
+               "newValue": { "…full practice-location entry…": "phone 555-0199" }, "source": "portal-attestation" } },
     { "table": "attestation_tasks", "operation": "UPDATE",
       "row": { "id": "task-7f3a…", "state": "SUBMITTED", "submittedAt": "2026-10-10T17:21:04Z" } },
     { "table": "attestation_tasks", "operation": "INSERT",
@@ -505,7 +529,7 @@ All writes commit or fail **together** — the module's own database, same shape
 - **Why this guard is kept, and why the hash is the lean version of it:**
   - Some staleness guard is mandatory (D2-19: never a silent overwrite) — the failure it prevents is quiet and compliance-shaped: a NO_CHANGE confirmation recorded against values the attester never saw.
   - A **timestamp check** was rejected: the merge pipeline touches the OV row's `updated_at` even when no displayed value changed — constant false rejections.
-  - **Echoing all displayed values back at submit** is the same guard with a fatter payload — the server must canonicalize both sides to compare either way; the hash just compresses "compare 11 fields" into "compare two strings."
+  - **Echoing all displayed values back at submit** is the same guard with a fatter payload — the server must canonicalize both sides to compare either way; the hash just compresses "compare every displayed field" into "compare two strings."
   - Total cost: one canonicalization function, one string in two payloads, one comparison. The two OV reads it requires are single-row lookups through the existing api-layer read endpoints — milliseconds, no state held between them.
 
 - **The prefill values are recorded, not just their fingerprint:** the `FORM_PREFILLED` event's `detail` stores the mandated field **values** as returned. The OV keeps no history, so a hash alone cannot reconstruct what was shown years later — the stored values make "show me exactly what the attester confirmed" answerable from the audit trail directly (7-year retention applies).
@@ -525,60 +549,61 @@ Form modes (`CONFIRM`, `FLAG`, `EDIT`) are configured **per tenant** — "plan" 
 
 ### Prefill field map — source per field
 
-Mirrors v2 §6.7.2 (Product answers of 2026-09-08, ratification pending). This is the field-by-field resolution of *The field set is fixed* above: what the prefill GET shows, where the backend reads it, and how the practitioner's rows are reached. The composed read (v2 F-3) is exactly these hops; each returned item carries the identity of the row it came from so a submitted edit routes back to it. Open rows block the OpenAPI freeze for the GET.
+Final list, confirmed 2026-09-11 (v2 D2-39, identical to v2 §6.7.1). What the prefill GET shows, the table and column each value is read from, and the join that reaches it. Sources verified against the entity schemas, the DAL Liquibase changesets, the roster system-field mapping (`roster-system-fields.json`) and `GET /practitioners/{id}/relationships/all`. All reads go through the existing api-layer read endpoints.
 
-**Linkage — how a practitioner reaches its locations.** From `PractitionerLocationLookupRepository.CHAIN_QUERY` (core-data-access-layer), verified 2026-09-08. Every hop is tenant-scoped. OV tables have no foreign key: the link table's crosswalk id must be contained in the OV row's `contributing_crosswalks` array.
+**Practitioner block** — one per practitioner. Anchor: `core_practitioners_ov`, `tenant_id` = tenant, `contributing_crosswalks` contains the task's `certify_practitioner_id`.
 
-| Hop | Table | Join | Gives |
-|---|---|---|---|
-| 1 | `core_practitioners_ov` | `tenant_id` = tenant; `contributing_crosswalks` contains the tenant's `certify_practitioner_id` | practitioner Golden record |
-| 2 | `tenant_practitioners` | `certify_practitioner_id` IN `core_practitioners_ov.contributing_crosswalks` | `id` |
-| 3 | `tenant_group_practitioners` | `tenant_practitioner_id` = `tenant_practitioners.id`; `tenant_group_id` = `tenant_groups.id` | the group-affiliation row |
-| 4 | `group_practitioner_locations` | `tenant_group_practitioner_id` = `tenant_group_practitioners.id` | one row per practitioner-at-location; `data.acceptingNewPatients` |
-| 5 | `tenant_group_locations` | `id` = `group_practitioner_locations.tenant_group_location_id` | `group_location_id` |
-| 6 | `group_locations` | `id` = `tenant_group_locations.group_location_id` | `location_id` |
-| 7 | `core_locations_ov` | `group_locations.location_id` IN `core_locations_ov.contributing_crosswalks` | location Golden record |
-| 8 | `location_entity_addresses` | `location_id` = `group_locations.location_id` | `entity_address_id`; `data.addressType` |
-| 9 | `core_entity_addresses_ov` | `location_entity_addresses.entity_address_id` IN `core_entity_addresses_ov.contributing_crosswalks` | address Golden record |
+- prefix
+  - `core_practitioners_ov`: `prefix`
+- firstName
+  - `core_practitioners_ov`: `firstName`
+- lastName
+  - `core_practitioners_ov`: `lastName`
+- suffix
+  - `core_practitioners_ov`: `suffix`
+- npi (display-only)
+  - `core_practitioners_ov`: `npi`
+- languages
+  - `core_practitioners_ov`: `languages[]` — entry `{ language, isPrimary }`
+- culturalCompetency
+  - `core_practitioners_ov`: `culturalCompetency`
+- primaryEmail
+  - `core_practitioners_ov`: `primaryEmail`
+- hospitalAffiliations (name, type)
+  - `core_practitioners_ov`: `hospitalAffiliations[]` — entry `{ name, type }`
+- telemedicineAvailable
+  - `core_practitioners_ov`: `telemedicineAvailable`
+- practitionerSpecializedTraining (area of focus)
+  - `core_practitioners_ov`: `practitionerSpecializedTraining[]`
+- specialties
+  - `tenant_practitioner_specialty` rows: `tenant_practitioner_id` = `tenant_practitioners.id`, where `tenant_practitioners.certify_practitioner_id` IN `core_practitioners_ov.contributing_crosswalks`
+  - name: `tenant_practitioner_specialty.tenant_specialty_id` → `tenant_specialty.data.displayName`
+- practitionerRoles
+  - `core_practitioners_ov`: `practitionerRoles[]` — values `PCP`, `Specialist`, `Hospitalist`, `Hospital-based Provider`
+  - `practitionerRolesMap` holds only effective/termination dates per role; not displayed
 
-**Practitioner-level fields — one value set per practitioner per tenant.**
+**Practice-location block** — one per `group_practitioner_locations` row. Row reached: `tenant_group_practitioners.tenant_practitioner_id` = `tenant_practitioners.id` → `group_practitioner_locations.tenant_group_practitioner_id` = `tenant_group_practitioners.id`. The row `id` is the block's `entryKey`.
 
-| Portal field | Read from | Status (2026-09-08) |
-|---|---|---|
-| Name (prefix, first, middle, last, suffix) | `core_practitioners_ov`: `prefix`, `firstName`, `middleName`, `lastName`, `suffix` | Confirmed |
-| NPI | `core_practitioners_ov`: `npi` | Confirmed; display-only, never editable (D2-19) |
-| Practitioner phone number(s) | `core_practitioners_ov`: `phoneNumbers[]` | Confirmed. Half of Product's "telephone number"; the other half is the location phone below |
-| Specialty(ies) | `tenant_practitioner_specialty` (`tenant_practitioner_id` = `tenant_practitioners.id`); name via `tenant_specialty_id` → `tenant_specialties` | Confirmed. Not `Practitioner.specialties[]`, not location specialties. Release path writes a tenant link row, not the Golden record |
-| Languages spoken | `core_practitioners_ov`: `languages[]` | Confirmed |
-| Cultural competency | `core_practitioners_ov`: `culturalCompetency` | Same Product answer; confirm whether shown as its own field |
-| Telehealth offered | `core_practitioners_ov`: `telemedicineAvailable` | Confirmed (F-1) |
-| Telehealth URL | `core_practitioners_ov`: `telemedicineURL` | Confirmed (F-1) |
-| Group affiliation(s) | `tenant_group_practitioners` rows for the practitioner; display name via `tenant_group_id` → `tenant_groups` → group record | Confirmed. Tied to the open provider-admin scope question (D2-17 reopened by Product 2026-09-08) |
+- group (npi, name, tin)
+  - `core_groups_ov`: `npi`, `name`, `tin`
+  - join: `tenant_group_practitioners.tenant_group_id` = `tenant_groups.id` → `tenant_groups.group_id` = `core_groups_ov.certify_group_id`
+- website
+  - `group_practitioner_locations`: `data.groupPracticeLocationWebsite`
+- phone
+  - `group_practitioner_locations`: `data.phone`
+- fax
+  - `group_practitioner_locations`: `data.fax`
+- service address (addressLine1, addressLine2, city, state, zip)
+  - `core_entity_addresses_ov`: `addressLine1`, `addressLine2`, `city`, `state`, `zip`
+  - join: `group_practitioner_locations.tenant_group_location_id` = `tenant_group_locations.id` → `tenant_group_locations.group_location_id` = `group_locations.id` → `location_entity_addresses.location_id` = `group_locations.location_id` with `data.addressType` = `service` → `location_entity_addresses.entity_address_id` IN `core_entity_addresses_ov.contributing_crosswalks`
+- acceptingNewPatients
+  - `group_practitioner_locations`: `data.acceptingNewPatients` — values `Accepting New`, `Closed`, `Existing Patients Only`, `Telemedicine`, `Urgent Care Only`
+  - evidence: roster `acceptsNewPatients` writes this key on `GroupPractitionerLocation`; the relationships endpoint reads the network row first and falls back to this row
+- handicapAccessible
+  - `core_locations_ov`: `data.handicapAccessible` — the roster writes it here (`locationHandicapAccessible` → `CoreLocation.handicapAccessible`)
+  - join: `group_locations.location_id` IN `core_locations_ov.contributing_crosswalks`
+  - `group_practitioner_locations.data.handicapAccessible` exists in the schema but nothing writes it
 
-**Location-level fields — repeated once per `group_practitioner_locations` row; each block is one practice location.**
-
-| Portal field | Read from | Linkage | Status (2026-09-08) |
-|---|---|---|---|
-| Location name (block header, not attested) | `core_locations_ov`: `locationName` | hop 7 | Label only |
-| Practice address (line 1, line 2, city, state, zip) | `core_entity_addresses_ov`: `addressLine1`, `addressLine2`, `city`, `state`, `zip` | hops 8–9, filtered to the practice address type | Level confirmed: practice only; mailing/billing excluded. **Open:** `AddressType` enum has no `practice` value (`billing`, `mailing`, `MRStorageAddress`, `office`, `service`, `w9Address`); `office` assumed |
-| Practice location phone | `core_locations_ov`: `phone` | hop 7 | Level confirmed: location phone, network-agnostic. **Open:** also `appointmentPhone`, `afterHoursPhone`, `callCoveragePhone`? Other half of Product's "telephone number" |
-| Practice website | `core_locations_ov`: `website` | hop 7 | **Open:** Product may move website to practitioner level (no such field today); location level assumed for MVP |
-| Accepting new patients at this location | `group_practitioner_locations`: `data.acceptingNewPatients` | hop 4 (the row itself) | Level confirmed per Product's #7 answer (doctor at this location). **Open:** confirm it is not `core_locations_ov.acceptsNewPatients` (office as a whole); F-2 wording could mean either. Network level excluded for MVP |
-| Disability / ADA accommodations | `core_locations_ov`: `adaCompliance` (structured object) | hop 7 | Confirmed; sub-attribute rendering is an engineering decision |
-
-**Excluded from the form.**
-
-| Item | Why |
-|---|---|
-| Office hours, fax | D2-25; confirm Product's F-2 mention of office hours does not reopen it |
-| Everything on `tenant_group_location_practitioner_networks` (`acceptingNewPatients`, `appointmentPhone`, `languageSpoken[]`, `officeHours`) | Product: network participation out of scope for MVP |
-| `includePractitionerLocationInNetworkDirectory` | Product: not attested; it defines who gets an attestation at all (population rule → doc 1) |
-| Mailing, billing and other non-practice address types | Product: practice address only |
-| `core_practitioners_ov.addresses[]` | Superseded by practice-location addresses |
-| `core_practitioners_ov.specialties[]`, `specialty`, `cmsSpecialties`; `core_locations_ov.locationPrimarySpecialty`, `locationHsdSpecialty` | Product: tenant practitioner specialty is the attested one |
-| `core_locations_ov.languagesSpokenAtLocation` | Product: languages at practitioner level |
-
-**Still pending Product:** location phone columns · website level · accepting-new-patients table · practice address type value · office-hours exclusion · cultural competency display.
 
 ## Data model and migration
 
@@ -608,11 +633,11 @@ Mirrors v2 §6.7.2 (Product answers of 2026-09-08, ratification pending). This i
   - Whether the links are declared Spanner `FOREIGN KEY` constraints or interleaved tables is doc 6's DDL call; this doc's contract is the pointer shape above.
 
 - **Worked example — one attestation, end to end:**
-  - The form opens against task `task-7f3a…` (`OPEN`, due 2026-10-15). Prefill shows the 11 mandated fields read live from the OV; their hash is `snapshot_version` `v1:9f3ac2…`.
-  - The attester corrects the office phone (`555-0100` → `555-0199`), removes a stale address, and confirms the other nine fields unchanged.
+  - The form opens against task `task-7f3a…` (`OPEN`, due 2026-10-15). Prefill shows the confirmed field set (*Prefill field map*) read live from the OV and the practitioner's tenant link rows; their hash is `snapshot_version` `v1:9f3ac2…`.
+  - The attester corrects one practice location's phone (`555-0100` → `555-0199`), removes a stale hospital affiliation, and confirms everything else unchanged.
   - Submit passes the guards, and **one transaction** writes:
     - 1 row in `attestation_submissions` — outcome `UPDATED`, the attester's identity, the `snapshot_version` attested against;
-    - 2 rows in `attestation_staged_items` — the phone `UPDATE` and the address `REMOVE`, one row per change;
+    - 2 rows in `attestation_staged_items` — the practice-location `UPDATE` and the hospital-affiliation `REMOVE`, one row per change;
     - the task flips to `SUBMITTED`, the `OUTREACH_CANCEL` outbox row lands (the Smart Outreach Service flips the pending reminder sends to `CANCELLED` on our `CANCEL_SENDS` command), and the successor `SCHEDULED` row lands (next attestation date = submission + 90 days);
     - the audit rows for all of it.
   - The nine confirmed-but-untouched fields write **no rows anywhere**: confirming them is recorded by the submission row itself — outcome plus `snapshot_version` prove exactly what the attester saw and accepted. Staged items are deltas only.
@@ -642,11 +667,11 @@ Mirrors v2 §6.7.2 (Product answers of 2026-09-08, ratification pending). This i
   "id": "si-20fa…",
   "submissionId": "sub-5c2e…",
   "taskId": "task-7f3a…",
-  "attribute": "telephoneNumbers",
+  "attribute": "practiceLocations",
   "operation": "UPDATE",
-  "entryKey": "office-1",
-  "oldValue": { "number": "555-0100" },
-  "newValue": { "number": "555-0199" },
+  "entryKey": "gpl-41c9…",
+  "oldValue": { "group": { "npi": "1987654321", "name": "Lakeside Medical Group", "tin": "12-3456789" }, "website": "https://lakeside.example", "phone": "555-0100", "fax": "555-0101", "serviceAddress": { "addressLine1": "12 Lake Rd", "addressLine2": null, "city": "Columbus", "state": "OH", "zip": "43215" }, "acceptingNewPatients": "Accepting New", "handicapAccessible": true },
+  "newValue": { "group": { "npi": "1987654321", "name": "Lakeside Medical Group", "tin": "12-3456789" }, "website": "https://lakeside.example", "phone": "555-0199", "fax": "555-0101", "serviceAddress": { "addressLine1": "12 Lake Rd", "addressLine2": null, "city": "Columbus", "state": "OH", "zip": "43215" }, "acceptingNewPatients": "Accepting New", "handicapAccessible": true },
   "source": "portal-attestation"
 }
 ```
@@ -659,15 +684,15 @@ The three tables count three different things; no fact appears twice:
 | --- | --- | --- |
 | `attestation_tasks` | obligation (one 90-day cycle) | 1 per practitioner per cycle |
 | `attestation_submissions` | act of attesting | 0 or 1 per task |
-| `attestation_staged_items` | one field change | 0 to ~11 per submission |
+| `attestation_staged_items` | one field change | 0 to a few dozen per submission (one per changed field or list entry) |
 
-Walk one submission through it — the attester corrects a phone number and removes a stale address:
+Walk one submission through it — the attester corrects one practice location's phone number and removes a stale hospital affiliation:
 
 - `attestation_tasks`: **1 row** flips to `SUBMITTED` — the obligation is answered.
 - `attestation_submissions`: **1 row** — who attested, when, against which `snapshot_version`. Immutable evidence.
-- `attestation_staged_items`: **2 rows** — the phone change and the address removal, each with its own life.
+- `attestation_staged_items`: **2 rows** — the practice-location change and the affiliation removal, each with its own life.
 
-Now the reviewer (doc 7) **accepts the phone change and rejects the address removal** — maybe a vendor recommendation says the address is still valid:
+Now the reviewer (doc 7) **accepts the phone change and rejects the affiliation removal** — maybe the payer's own records show the affiliation still active:
 
 - Row 1 moves to its approved state and is released to a slice via Sync Latest.
 - Row 2 moves to rejected and goes nowhere.
@@ -679,7 +704,7 @@ Why this creates no drift:
 - Here each fact lives exactly once: the task owns the schedule and state; the submission owns the attestation facts; each item owns one proposed change. They connect by ids (`task_id`, `submission_id`) — pointers, not copies.
 - When the reviewer accepts an item, exactly one row changes; nothing anywhere else must be kept in agreement. No duplication → nothing to sync → no drift, by construction.
 
-- A NO_CHANGE submission writes the submission row only — no staged items; the row itself is the reviewer-visible record next to any pending vendor recommendation (D2-09).
+- A NO_CHANGE submission writes the submission row only — no staged items; the row itself is the reviewer-visible record the reviewer acknowledges (D2-09).
 
 - **Not written by this module:** `portal_application` (keeps serving the portal's existing flows; its link-expiry columns are read at their verify step, never written by us), the OV (prefill reads it; nothing here writes it), and the Smart Outreach Service's tables (that service cancels its own sends on our command — never us).
 
@@ -793,7 +818,7 @@ Questions this answers directly: "what exactly did the attester see when they at
 | Emailed link visited unauthenticated                   | The link is tokenless (doc 1's D17) — the portal's normal login gates it; nothing expires; the task stays submittable indefinitely (D2-23) |
 | UI sends an NPI edit                                   | Whole submission rejected with `400 NPI_EDIT_REJECTED` regardless of UI state — never a silent strip  |
 | Browser supplies a foreign practitioner/tenant id      | Ids come from server-side resolution; the backend re-checks tenant scope anyway — two layers          |
-| NO_CHANGE while a vendor recommendation is pending     | Submission record is reviewer-visible next to the recommendation (D2-09); nothing automatic           |
+| NO_CHANGE submission                                    | Submission record is reviewer-visible and acknowledged by the reviewer (D2-09); nothing automatic      |
 | Backend down at submit time                            | Explicit "temporarily unavailable" from portal-api; no silent success, nothing lost; user retries     |
 | Submission transaction fails mid-commit                | Impossible partially — one transaction rolls back whole; task stays OPEN; the attester retries        |
 | Cancel command published but the outreach service is down/lagging | Pub/Sub holds and redelivers the command until acked; pending tiers are cancelled when it is consumed; a tier already claimed sends — one extra email worst case (`CANCEL_TOO_LATE` outcome); `expiresAt` bounds anything staler (doc 1's D16 — no send-time task-state check); the relay sweep re-publishes a crash-stranded outbox row (doc 1) |

@@ -2,7 +2,7 @@
 
 *Reference input, not source of truth. Nothing here is folded into the v2 decision register (§7) or the open register (§9.1) until Dev reviews and Product ratifies the items marked "confirm". Field-mapping question sent to Product (Madhunika Sivasankar) on Slack; Product replied same day. Two further design questions (association-level attestation, termination flow) raised in the same thread; no answer yet.*
 
-Jira: blocked subtasks CP-38092 (Doc 01 Cycle), CP-38538 (Doc 02 Portal lane), CP-38539 (Doc 03 SFTP), CP-38540 (Doc 04 Ingestion), parent CP-38793.
+Jira: blocked subtasks CP-38092 (Doc 01 Cycle), CP-38538 (Doc 02 Portal lane), parent CP-38793.
 
 ---
 
@@ -105,16 +105,12 @@ So "attest only Group A data" means: practitioner-level fields plus Group A's lo
 |---|---|---|---|
 | CP-38092 | Doc 01 Cycle | O-16 termination timing (4 + 3 new sub-questions); PDM-2 event contract (Q12); **new** population rule from directory-display = yes; D2-17 reopening changes task grain and outreach cancellation | Product + Compliance; PDM team |
 | CP-38538 | Doc 02 Portal lane | D2-17 reopening (identity resolution, task grain, snapshot hash); field mapping items 4, 5, 7 and the office-hours / D2-25 contradiction; view-only `CLOSED` UX (Scenario 2) | Product; Portal lead |
-| CP-38539 | Doc 03 SFTP | *not these three reasons*: O-1 Candor file contract, P2 transport confirmation | Product + Candor + Anmol/Ansar |
-| CP-38540 | Doc 04 Ingestion | *not these three reasons*: P1 signed vendor schema + confidence-tier mapping (O-1) | Product + Candor |
-
-Stale line to fix when tickets are updated: `ticket-breakdown-mvp1.md` P7 still says association depth is open and blocks DA-08; either mark it resolved by D2-17 or, if Product's reopening stands, widen its "Blocks" list to the tickets in §2.
 
 ---
 
 ## 5. Jira comment drafts
 
-### 5.1 Parent CP-38793 (Spike: Directory Accuracy and Portal Attestation)
+### 5.1 Parent CP-38793
 
 ```
 Moving the design-doc subtasks (CP-38092, CP-38538, CP-38539, CP-38540) to Blocked. The engineering side of the docs is done, but we still need clarity from Product on three things before the design can be frozen.
@@ -141,8 +137,6 @@ Moving the design-doc subtasks (CP-38092, CP-38538, CP-38539, CP-38540) to Block
    - Office hours: still out of the MVP form as previously agreed?
    - Directory display = yes as the attestation universe: does one location with display = yes qualify the practitioner, or all locations? And if it later flips to no, treat like termination?
 
-CP-38539 (SFTP) and CP-38540 (Ingestion) are blocked separately on the Candor file contract and vendor schema, not on the above.
-
 Detailed analysis: cos-docs/attestation-module/reference/product-clarifications-2026-09-08.md
 ```
 
@@ -158,15 +152,6 @@ Blocked. Doc finalized and re-approved 2026-09-07, but three inputs change its c
 Blocked. Doc finalized 2026-08-27 on D2-17 (tenant-scoped provider admin); Product now indicates group-scoped attestation, which changes identity resolution, task grain, snapshot_version and adds a partial-attestation state that does not exist. Field-mapping answers from Product 2026-09-08 resolve 8 of 11 fields; still need: which core_locations_ov phone (#4), accepting-new-patients table (group_practitioner_locations vs core_locations_ov, #7 vs F-2 answers conflict), website level (#5), and whether office hours stays excluded (D2-25). GET contract cannot freeze until these land. Details on CP-38793.
 ```
 
-**CP-38539 (Doc 03 SFTP):**
-```
-Blocked on the Candor side only: O-1 file contract (columns, enums, manifest fields, schema versioning) and P2 transport confirmation. Doc itself finalized and approved 2026-08-27. Not affected by the D2-17 / termination / field-mapping items on CP-38793.
-```
-
-**CP-38540 (Doc 04 Ingestion):**
-```
-Blocked on P1: signed vendor schema and canonical ordered confidence-tier mapping (resolves CT-011, O-1). Doc drafted; review and template retrofit can proceed, sign-off cannot. Not affected by the D2-17 / termination / field-mapping items on CP-38793.
-```
 
 ---
 

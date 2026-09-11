@@ -6,7 +6,5 @@
   "exportBatchRef": "org-xyz-candor-2026-09-001",
   "candorBatchId": "CB-2026-09-001",
   "rowCount": 32,
-  "sha256": "3a37e7f32df92351882092dd5e63ab320f7dc2cecb5c9458f02911091bcaf2cb",
-  "producedAt": "2026-09-15T09:30:00Z",
-  "contact": "ops@candorhealth.example"
+  "sha256": "3a37e7f32df92351882092dd5e63ab320f7dc2cecb5c9458f02911091bcaf2cb"
 }

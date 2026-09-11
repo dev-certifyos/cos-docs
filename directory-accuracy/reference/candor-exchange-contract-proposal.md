@@ -1,16 +1,16 @@
 # Candor data exchange contract — CertifyOS proposal
 
-**What this is.** The complete, internally consistent proposal for the CertifyOS ↔ Candor file exchange: the export file we place for Candor (the "template"), the recommendations file Candor returns, the naming and batch-identity rules that tie the two together, and the change-control rules that keep the contract from drifting. It merges the transport half (the SFTP-exchange design) and the content half (the ingestion design, Candor data-schema proposal) into the one document the technical call negotiates against. *(Both of those module drafts were retired 2026-09-08 and moved to `platform/directory-accuracy/source-material/` on 2026-09-09; their successor is the single `platform/directory-accuracy/directory-accuracy.md`.)* This closes open item O-1 ("prepare an internal proposal before the Candor technical call") once signed.
+**What this is.** The complete, internally consistent proposal for the CertifyOS ↔ Candor file exchange: the export file we place for Candor (the "template"), the recommendations file Candor returns, the naming and batch-identity rules that tie the two together, and the change-control rules that keep the contract from drifting. It merges the transport half and the content half (Candor data-schema proposal) into the one document the technical call negotiates against; the service design lives in the vendor export and vendor ingestion module docs. This closes open item O-1 ("prepare an internal proposal before the Candor technical call") once signed.
 
 **Why we lead with a proposal.** The one real Candor delivery we have seen (the MMO delta report) diverged from Candor's own July 2026 data dictionary — different column names, missing evidence and reason columns, different relationship enums, and a ~1,000-row facilities sheet in a practitioner-only engagement. Signing one explicit version, columns and enums included, is how that drift stops being a per-delivery surprise and becomes a rejected batch with a clear error.
 
-**Internal status.** Everything here is consistent with the module designs as of 2026-09-08. Two internal caveats, invisible to Candor: the no-manifest transport design (SFTP module rewrite of 2026-09-05) is pending final internal review, and the exact outbound column subset depends on Product's pending field-map answers (§4.4). Neither changes what we ask of Candor. **Transport facts updated 2026-09-08:** Candor's SFTP account is already live on the CertifyOS platform (Jira TS-111546, closed 2026-09-04), and the folder names below now use the platform's fixed `from/` and `to/` roots (earlier drafts said `outbound/`/`inbound/`, which do not exist on the platform). **Worked sample files for both directions live in `reference/samples/`** — bring them to the call. **Two decision menus added 2026-09-08** (§2.4 completeness signal, §5.6 file shape): each lists the options, our preference order, and our recommendation, so Candor chooses from a prepared set rather than an open question. ⚠ If Candor picks a manifest or sidecar (§2.4 options 2/3), the directory accuracy doc must carry a per-vendor `completenessSignal` setting (`NONE | RENAME | SHA256_SIDECAR | MANIFEST`) so the receiver triggers on the marker file instead of the data file; the retired SFTP draft's "no manifest" decision becomes "manifest not *required*". The ingestion half is unchanged under every option — row-grain idempotency stays the guarantee.
+**Internal status.** Everything here is consistent with the directory accuracy design as of 2026-09-08. Two internal caveats, invisible to Candor: the no-manifest transport option is pending final internal decision, and the exact outbound column subset depends on Product's pending field-map answers (§4.4). Neither changes what we ask of Candor. **Transport facts updated 2026-09-08:** Candor's SFTP account is already live on the CertifyOS platform (Jira TS-111546, closed 2026-09-04), and the folder names below now use the platform's fixed `from/` and `to/` roots (earlier drafts said `outbound/`/`inbound/`, which do not exist on the platform). **Worked sample files for both directions live in `reference/samples/`** — bring them to the call. **Two decision menus added 2026-09-08** (§2.4 completeness signal, §5.6 file shape): each lists the options, our preference order, and our recommendation, so Candor chooses from a prepared set rather than an open question. ⚠ If Candor picks a manifest or sidecar (§2.4 options 2/3), the directory accuracy doc must carry a per-vendor `completenessSignal` setting (`NONE | RENAME | SHA256_SIDECAR | MANIFEST`) so the receiver triggers on the marker file instead of the data file; the earlier "no manifest" leaning becomes "manifest not *required*". The ingestion half is unchanged under every option — row-grain idempotency stays the guarantee.
 
 ---
 
 ## 1. The exchange at a glance
 
-1. **Monthly, per tenant.** At the start of each monthly cadence period, CertifyOS places one export file per tenant in Candor's SFTP folder. The file lists every practitioner whose attestation obligation is currently open, with the directory data we want verified.
+1. **Monthly, per tenant.** At the start of each monthly cadence period, CertifyOS places one export file per tenant in Candor's SFTP folder. The file lists every practitioner selected by the tenant's configured selection query, with the directory data we want verified.
 2. **Candor verifies and returns one file per export.** Candor uploads a recommendations file to its `to/<tenant>/` folder — one row per attribute-level finding, echoing our export batch id in the filename.
 3. **File placement is the signal, in both directions.** No trigger message, no API call. We detect Candor's upload within minutes; Candor detects our export by listing its folder. Whether Candor also marks a delivery as *complete* (manifest, checksum sidecar, or rename-on-finish) is a choice we put to Candor in §2.4 — we recommend the manifest.
 4. **Every row Candor returns gets exactly one recorded outcome on our side** — staged for review, recorded as a no-op, excluded with a reason, or quarantined for a human. Nothing is silently discarded, and Candor's recommendations never write to our records directly; a payer reviewer decides each one.
@@ -55,9 +55,9 @@ to/<tenant-id>/      ← Candor writes (read/write/delete); CertifyOS reads
 
 ### 2.3 Timing
 
-- **Export cadence: monthly** (configurable per tenant later; monthly is the Candor starting point). The export is placed at the **start** of the cadence period so Candor works in parallel with the attestation window.
+- **Export cadence: monthly** (configurable per tenant later; monthly is the Candor starting point). The export is placed at the **start** of the cadence period.
 - **Response window:** Candor returns its recommendations file within an agreed number of days of the export (**to agree on the call** — our alerting flags a silent batch after this window).
-- A practitioner still unresolved at the next cadence period appears in the next export again — an unanswered obligation stays on Candor's worklist. Duplicate findings across periods are handled on our side (§6.3); Candor never needs to track what it already sent.
+- A practitioner still unresolved at the next cadence period appears in the next export again — an unresolved practitioner stays on Candor's worklist. Duplicate findings across periods are handled on our side (§6.3); Candor never needs to track what it already sent.
 
 ### 2.4 Completeness signal — options, our preference, our recommendation
 
@@ -164,7 +164,7 @@ The filename ties a *delivery* to an *export*. Row identity ties each *finding* 
 | U9 | Act on "this provider is deceased / NPI deactivated / no active licence" — Candor's most valuable finding, and one our attribute list previously had no slot for | A practitioner-scoped status attribute | — | `attribute = practitioner_status`, `recommendation = REMOVE`, reason from Candor's NPI enum (§5.3) |
 | U10 | Set the effective date of an accepted `ADD`/`REMOVE` (Product spec §2.3.3 open question: Candor "does not always supply one") | A slot for it, optional | — | `effective_from` (optional) |
 | U11 | Render evidence correctly without guessing whether a string is a date or a link | Evidence type beside the value | — | `evidence_type` (`URL` / `DATE` / `NONE`) |
-| U12 | Help Candor match our location to a health-system profile (their main verification source) | The location's name | `location_name` (matching aid, not attested) | — |
+| U12 | Help Candor match our location to a health-system profile (their main verification source) | The location's name | `location_name` (matching aid, not verified) | — |
 | U13 | Keep mailing/billing addresses out now and admit them later without ambiguity | Explicit address role | `address_type` (`PRACTICE` in v1) | — |
 | U14 | Cross-reference Candor's records for the future feedback loop and cross-cycle dedup on their side | Candor's ids, if they have them | — | `candor_provider_ref`, `candor_location_ref` (optional) |
 | U15 | Multi-location practitioner: know **which** location a `KEEP` refers to | Location identity on every location-scoped row | `certify_location_id` + address legs | same, echoed |
@@ -207,7 +207,7 @@ The v1 shape carries every slot the end-to-end flow needs; adding a *verifiable 
 
 ### 4.3 Columns
 
-Identity and context first (1–8), then the practitioner block (9–14), then the location block (15–23), then the remaining attested fields. Column numbers are referenced by §5.3.
+Identity and context first (1–7), then the practitioner block (8–13), then the location block (14–22), then the remaining verified fields. Column numbers are referenced by §5.3.
 
 | # | Column | Content | Notes |
 | --- | --- | --- | --- |
@@ -218,30 +218,29 @@ Identity and context first (1–8), then the practitioner block (9–14), then t
 | 5 | `entity_type` | `PRACTITIONER` | Always this value in v1; facilities/groups later are new values, not new columns |
 | 6 | `certify_practitioner_id` | Our stable practitioner reference | **Echo required** on every returned row (§5.2 col 7) |
 | 7 | `npi` | The practitioner's NPI | Matching identity for Candor; cross-checked against col 6 on return |
-| 8 | `attestation_due_date` | The obligation's due date, ISO | Context: when this practitioner's attestation window closes |
-| 9–13 | `name_prefix`, `first_name`, `middle_name`, `last_name`, `name_suffix` | Provider name | |
-| 14 | `group_affiliation` | Group name(s) the practitioner is affiliated with under this tenant | Multi-valued: `;`-separated |
-| 15 | `certify_location_id` | Our stable id for this practice location | **Echo required** on location-scoped returned rows (§5.2 col 9) |
-| 16 | `location_name` | The practice/location name as we hold it | Matching aid for Candor's health-system lookups; **not** an attested field, no findings expected |
-| 17 | `address_type` | `PRACTICE` | Always this value in v1; mailing/billing excluded by design |
-| 18–21 | `address_line1`, `address_line2`, `city`, `state` | The practice-location address | Human-readable location identity beside col 15 |
-| 22 | `zip` | 5-digit, string (leading zeros preserved) | |
-| 23 | `location_phone` | The practice location's phone | |
-| 24 | `practitioner_phone` | The practitioner's own phone number(s) | Multi-valued: `;`-separated |
-| 25 | `website` | The practice website | |
-| 26 | `specialty` | The practitioner's specialty(ies) under this tenant | Multi-valued: `;`-separated |
-| 27 | `accepting_new_patients` | `Y` / `N` — this practitioner, at this location | |
-| 28 | `languages` | Languages spoken by the practitioner | Multi-valued: `;`-separated |
-| 29 | `telehealth_available` | `Y` / `N` — practitioner-level | |
-| 30 | `telehealth_url` | Practitioner's telehealth URL | |
-| 31 | `ada_accommodations` | Disability/ADA accommodations at this location | Multi-valued: `;`-separated; rendering of the structured value to agree on the call |
+| 8–12 | `name_prefix`, `first_name`, `middle_name`, `last_name`, `name_suffix` | Provider name | |
+| 13 | `group_affiliation` | Group name(s) the practitioner is affiliated with under this tenant | Multi-valued: `;`-separated |
+| 14 | `certify_location_id` | Our stable id for this practice location | **Echo required** on location-scoped returned rows (§5.2 col 9) |
+| 15 | `location_name` | The practice/location name as we hold it | Matching aid for Candor's health-system lookups; **not** a verified field, no findings expected |
+| 16 | `address_type` | `PRACTICE` | Always this value in v1; mailing/billing excluded by design |
+| 17–20 | `address_line1`, `address_line2`, `city`, `state` | The practice-location address | Human-readable location identity beside col 14 |
+| 21 | `zip` | 5-digit, string (leading zeros preserved) | |
+| 22 | `location_phone` | The practice location's phone | |
+| 23 | `practitioner_phone` | The practitioner's own phone number(s) | Multi-valued: `;`-separated |
+| 24 | `website` | The practice website | |
+| 25 | `specialty` | The practitioner's specialty(ies) under this tenant | Multi-valued: `;`-separated |
+| 26 | `accepting_new_patients` | `Y` / `N` — this practitioner, at this location | |
+| 27 | `languages` | Languages spoken by the practitioner | Multi-valued: `;`-separated |
+| 28 | `telehealth_available` | `Y` / `N` — practitioner-level | |
+| 29 | `telehealth_url` | Practitioner's telehealth URL | |
+| 30 | `ada_accommodations` | Disability/ADA accommodations at this location | Multi-valued: `;`-separated; rendering of the structured value to agree on the call |
 
 Sample (one practitioner with two locations = two rows; practitioner columns repeat):
 
 ```csv
-schema_version,export_batch_id,export_generated_at,tenant_id,entity_type,certify_practitioner_id,npi,attestation_due_date,name_prefix,first_name,middle_name,last_name,name_suffix,group_affiliation,certify_location_id,location_name,address_type,address_line1,address_line2,city,state,zip,location_phone,practitioner_phone,website,specialty,accepting_new_patients,languages,telehealth_available,telehealth_url,ada_accommodations
-certify-export-v1,org-xyz-candor-2026-09-001,2026-09-01T06:00:00Z,org-xyz,PRACTITIONER,cert-000123,1234567893,2026-09-30,Dr.,Jane,,Rivera,MD,Sunrise Medical Group,loc-000501,Sunrise Medical Group - Main St,PRACTICE,100 Main St,Suite 4,Columbus,OH,43215,614-555-0100,614-555-0142,https://sunrisemed.example,Cardiology,Y,English;Spanish,Y,https://sunrisemed.example/tele,Wheelchair accessible
-certify-export-v1,org-xyz-candor-2026-09-001,2026-09-01T06:00:00Z,org-xyz,PRACTITIONER,cert-000123,1234567893,2026-09-30,Dr.,Jane,,Rivera,MD,Sunrise Medical Group,loc-000502,Sunrise Medical Group - Dublin,PRACTICE,4500 Lakeview Blvd,,Dublin,OH,43017,614-555-0177,614-555-0142,https://sunrisemed.example,Cardiology,N,English;Spanish,Y,https://sunrisemed.example/tele,
+schema_version,export_batch_id,export_generated_at,tenant_id,entity_type,certify_practitioner_id,npi,name_prefix,first_name,middle_name,last_name,name_suffix,group_affiliation,certify_location_id,location_name,address_type,address_line1,address_line2,city,state,zip,location_phone,practitioner_phone,website,specialty,accepting_new_patients,languages,telehealth_available,telehealth_url,ada_accommodations
+certify-export-v1,org-xyz-candor-2026-09-001,2026-09-01T06:00:00Z,org-xyz,PRACTITIONER,cert-000123,1234567893,Dr.,Jane,,Rivera,MD,Sunrise Medical Group,loc-000501,Sunrise Medical Group - Main St,PRACTICE,100 Main St,Suite 4,Columbus,OH,43215,614-555-0100,614-555-0142,https://sunrisemed.example,Cardiology,Y,English;Spanish,Y,https://sunrisemed.example/tele,Wheelchair accessible
+certify-export-v1,org-xyz-candor-2026-09-001,2026-09-01T06:00:00Z,org-xyz,PRACTITIONER,cert-000123,1234567893,Dr.,Jane,,Rivera,MD,Sunrise Medical Group,loc-000502,Sunrise Medical Group - Dublin,PRACTICE,4500 Lakeview Blvd,,Dublin,OH,43017,614-555-0177,614-555-0142,https://sunrisemed.example,Cardiology,N,English;Spanish,Y,https://sunrisemed.example/tele,
 ```
 
 Full worked example (7 practitioners, 8 location rows): `reference/samples/from/org-xyz/org-xyz_org-xyz-candor-2026-09-001_20260901.csv`.
@@ -279,7 +278,7 @@ Identity first (1–13), then the finding (14–17), then Candor's verification 
 | 6 | `entity_type` | `PRACTITIONER` | Rows with any other value are set aside in v1 |
 | 7 | `certify_practitioner_id` | **Echo of export col 6** | **Required.** Must match the `(npi, export_batch_ref)` pair in our export registry, else the row is quarantined `IDENTITY_MISMATCH` and reported |
 | 8 | `npi` | The practitioner the finding concerns | Required; cross-checked against col 7 |
-| 9 | `certify_location_id` | **Echo of export col 15** | **Required on rows about a location we sent**; **empty** on practitioner-level rows and on `ADD practice_address` (a location we did not send) |
+| 9 | `certify_location_id` | **Echo of export col 14** | **Required on rows about a location we sent**; **empty** on practitioner-level rows and on `ADD practice_address` (a location we did not send) |
 | 10–13 | `address_line1`, `city`, `state`, `zip` | The location's address legs | For a sent location: **as we sent them, verbatim** (redundancy beside col 9). For a discovered location: the new address. Empty on practitioner-level rows |
 | 14 | `attribute` | Which field the recommendation concerns | From the signed attribute vocabulary (§5.3) |
 | 15 | `recommendation` | `KEEP` / `UPDATE` / `ADD` / `REMOVE` | Explicit verb — never implied by status + reason (§5.5) |
@@ -339,7 +338,7 @@ Rules that make the vocabulary unambiguous:
 ### 5.4 What Candor should know about how we treat their data
 
 - **Confidence is inert.** We store whatever `confidence` says, reviewers can see it, but no automated decision reads it. Candor should not expect high-confidence rows to auto-apply — every actionable recommendation is decided by a human payer reviewer.
-- **`KEEP` rows are wanted.** A `KEEP` with `verification_status = VALID` is a positive verification our reviewers see alongside provider attestations — send them, don't filter them out.
+- **`KEEP` rows are wanted.** A `KEEP` with `verification_status = VALID` is a positive verification our reviewers want to see — send them, don't filter them out.
 - **Practitioners only.** Facility/organization rows are out of scope for this engagement; any that appear are counted and set aside, never processed (the MMO delta report contained a ~1,000-row facilities sheet — that must not recur in this feed).
 - **Only practitioners from the referenced export.** A row about a practitioner who was not in the export named by the filename's `exportBatchRef` is recorded and set aside — we did not ask for it that cycle, and it will not reach a reviewer. If Candor believes proactive findings have value, that is a separate conversation, not a row in this feed.
 - **Recommendations previously rejected by a reviewer are suppressed on re-send** — an identical recommendation (same practitioner, attribute, operation, value) that a reviewer already rejected is filtered with a full audit trail. Candor does not need to track this; it explains why a re-sent finding may not generate action.
