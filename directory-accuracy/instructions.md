@@ -39,7 +39,7 @@ directory-accuracy/
 │   └── vendor-export-concepts.md      ← its companion (local prep)
 ├── (vendor-ingestion/)                ← module 2 — same file pair, created when its turn comes
 ├── jira-ticket-draft.md               ← Jira story + subtasks (published 2026-09-09, CP-39602)
-├── roster-pipeline-reuse-analysis.md  ← why not extend the roster pipeline; code receipts
+├── roster-pipeline-reuse-analysis.md  ← why not extend the roster pipeline; talking points (full code receipts in reference/roster-pipeline-reuse-analysis-detailed.md)
 └── reference/                         ← current vendor evidence, contract proposal, manifest example, samples
 ```
 

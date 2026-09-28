@@ -354,60 +354,65 @@ Upload events from the SFTP/storage layer **can be duplicated, delayed, lost, or
 
 #### 6.7.1 The attestation field set — final
 
-Confirmed 2026-09-11 (D2-39). One list for the Portal prefill, the submission, the staged items, and the Candor export. Sources verified against the entity schemas, the DAL Liquibase changesets, the roster system-field mapping (`roster-system-fields.json`) and the practitioner relationships endpoint (`GET /practitioners/{id}/relationships/all`).
+Confirmed 2026-09-11 (D2-39). One list for Portal prefill, submission, staged items, and the Candor export. Endpoint paths refer to the raw response of `GET /practitioners/{id}/relationships/all` (`transformed=false`).
 
-**Practitioner block** — one per practitioner. Anchor: `core_practitioners_ov`, `tenant_id` = tenant, `contributing_crosswalks` contains the task's `certify_practitioner_id`.
+**Practitioner block** — one per practitioner. Read from the practitioner OV (`core_practitioners_ov`, `tenant_id` = tenant, `contributing_crosswalks` contains the task's `certify_practitioner_id`).
 
 - prefix
-  - `core_practitioners_ov`: `prefix`
+  - `core_practitioners_ov`: `data.prefix`
 - firstName
-  - `core_practitioners_ov`: `firstName`
+  - `core_practitioners_ov`: `data.firstName`
 - lastName
-  - `core_practitioners_ov`: `lastName`
+  - `core_practitioners_ov`: `data.lastName`
 - suffix
-  - `core_practitioners_ov`: `suffix`
+  - `core_practitioners_ov`: `data.suffix`
 - npi (display-only)
-  - `core_practitioners_ov`: `npi`
+  - `core_practitioners_ov`: `data.npi`
 - languages
-  - `core_practitioners_ov`: `languages[]` — entry `{ language, isPrimary }`
+  - `core_practitioners_ov`: `data.languages[]`
 - culturalCompetency
-  - `core_practitioners_ov`: `culturalCompetency`
+  - `core_practitioners_ov`: `data.culturalCompetency`
 - primaryEmail
-  - `core_practitioners_ov`: `primaryEmail`
+  - `core_practitioners_ov`: `data.primaryEmail`
 - hospitalAffiliations (name, type)
-  - `core_practitioners_ov`: `hospitalAffiliations[]` — entry `{ name, type }`
+  - `core_practitioners_ov`: `data.hospitalAffiliations[]`
 - telemedicineAvailable
-  - `core_practitioners_ov`: `telemedicineAvailable`
-- practitionerSpecializedTraining (area of focus)
-  - `core_practitioners_ov`: `practitionerSpecializedTraining[]`
-- specialties
-  - `tenant_practitioner_specialty` rows: `tenant_practitioner_id` = `tenant_practitioners.id`, where `tenant_practitioners.certify_practitioner_id` IN `core_practitioners_ov.contributing_crosswalks`
-  - name: `tenant_practitioner_specialty.tenant_specialty_id` → `tenant_specialty.data.displayName`
+  - `core_practitioners_ov`: `data.telemedicineAvailable`
+- practitionerSpecializedTraining
+  - `core_practitioners_ov`: `data.practitionerSpecializedTraining[]`
 - practitionerRoles
-  - `core_practitioners_ov`: `practitionerRoles[]` — values `PCP`, `Specialist`, `Hospitalist`, `Hospital-based Provider`
-  - `practitionerRolesMap` holds only effective/termination dates per role; not displayed
+  - `core_practitioners_ov`: `data.practitionerRoles[]`
+- specialties
+  - `tenant_practitioner_specialty` rows; name from `tenant_specialty.data.displayName`
+  - endpoint: `tenantPractitionerSpecialties[].tenantSpecialty.data.displayName`
 
-**Practice-location block** — one per `group_practitioner_locations` row. Row reached: `tenant_group_practitioners.tenant_practitioner_id` = `tenant_practitioners.id` → `group_practitioner_locations.tenant_group_practitioner_id` = `tenant_group_practitioners.id`. The row `id` is the block's `entryKey`.
+**Practice-location block** — one entry per `group_practitioner_locations` row.
+
+- endpoint: `groupMemberships[].groupPractitionerLocations[]`; entry key = `id`
 
 - group (npi, name, tin)
-  - `core_groups_ov`: `npi`, `name`, `tin`
-  - join: `tenant_group_practitioners.tenant_group_id` = `tenant_groups.id` → `tenant_groups.group_id` = `core_groups_ov.certify_group_id`
+  - `core_groups_ov`: `data.npi`, `data.name`, `data.tin`
+  - endpoint: `groupMemberships[].tenantGroup.group.data`
 - website
   - `group_practitioner_locations`: `data.groupPracticeLocationWebsite`
+  - endpoint: `groupPractitionerLocations[].data.groupPracticeLocationWebsite`
 - phone
-  - `group_practitioner_locations`: `data.phone`
+  - `group_practitioner_locations`: `data.phone` — no fallback to `core_locations_ov`
+  - endpoint: `groupPractitionerLocations[].data.phone`
 - fax
-  - `group_practitioner_locations`: `data.fax`
+  - `group_practitioner_locations`: `data.fax` — no fallback to `core_locations_ov`
+  - endpoint: `groupPractitionerLocations[].data.fax`
 - service address (addressLine1, addressLine2, city, state, zip)
-  - `core_entity_addresses_ov`: `addressLine1`, `addressLine2`, `city`, `state`, `zip`
-  - join: `group_practitioner_locations.tenant_group_location_id` = `tenant_group_locations.id` → `tenant_group_locations.group_location_id` = `group_locations.id` → `location_entity_addresses.location_id` = `group_locations.location_id` with `data.addressType` = `service` → `location_entity_addresses.entity_address_id` IN `core_entity_addresses_ov.contributing_crosswalks`
+  - `core_entity_addresses_ov`: `data.addressLine1`, `data.addressLine2`, `data.city`, `data.state`, `data.zip`
+  - endpoint: `groupPractitionerLocations[].locationEntityAddresses[]` where `data.addressType` = `service`, then `.address.data`
 - acceptingNewPatients
-  - `group_practitioner_locations`: `data.acceptingNewPatients` — values `Accepting New`, `Closed`, `Existing Patients Only`, `Telemedicine`, `Urgent Care Only`
-  - evidence: roster `acceptsNewPatients` writes this key on `GroupPractitionerLocation`; the relationships endpoint reads the network row first and falls back to this row
+  - `group_practitioner_locations`: `data.acceptingNewPatients` — never the network row
+  - endpoint: `groupPractitionerLocations[].data.acceptingNewPatients`
 - handicapAccessible
-  - `core_locations_ov`: `data.handicapAccessible` — the roster writes it here (`locationHandicapAccessible` → `CoreLocation.handicapAccessible`)
-  - join: `group_locations.location_id` IN `core_locations_ov.contributing_crosswalks`
-  - `group_practitioner_locations.data.handicapAccessible` exists in the schema but nothing writes it
+  - `core_locations_ov`: `data.handicapAccessible`
+  - endpoint: `groupPractitionerLocations[].groupLocation.location.data.handicapAccessible`
+
+**Shared rows** — service address, handicapAccessible, and group npi/name/tin sit on rows shared by every practitioner at that location or group. Release writes them as address, location, or group slices (doc 5). Everything else is per practitioner.
 
 **Response envelope**, beside the fields (S2 §1.5.1, §1.3.1–1.3.8, D2-19):
 

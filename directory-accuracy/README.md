@@ -11,8 +11,8 @@ directory-accuracy/
 ├── README.md                          ← this index
 ├── instructions.md                    ← HOW the module docs are written (template, house style, non-negotiables) — read first, every session
 ├── jira-ticket-draft.md               ← Jira story and subtasks for the service (published 2026-09-09, CP-39602)
-├── roster-pipeline-reuse-analysis.md  ← why the service is not built by extending the roster pipeline; code receipts
-├── vendor-export/                     ← module 1 — vendor export (placeholders, to write first)
+├── roster-pipeline-reuse-analysis.md  ← why the service is not built by extending the roster pipeline; talking-points version (full receipts in reference/roster-pipeline-reuse-analysis-detailed.md)
+├── vendor-export/                     ← module 1 — vendor export (draft written 2026-09-11, pending review)
 │   ├── vendor-export.md               ← the module design doc. The shareable artifact.
 │   └── vendor-export-concepts.md      ← concepts + supplementary material. Local prep only.
 ├── (vendor-ingestion/)                ← module 2 — created when its turn comes
@@ -30,4 +30,4 @@ directory-accuracy/
 
 ## Status
 
-Authoritative checklist: `instructions.md` §9. Snapshot: vendor export — placeholders created 2026-09-11, to write; vendor ingestion — not started.
+Authoritative checklist: `instructions.md` §9. Snapshot: vendor export — rewritten 2026-09-22, destination ask and pragmatic alternatives added 2026-09-24 (JobRunr tick on GCE, event-driven completion, egress copies the file to a destination on the request), published to Confluence 2026-09-24 under Engineering → PDM → [Directory accuracy](https://certifyos.atlassian.net/wiki/spaces/Engineerin/pages/2252603415/Directory+accuracy) as [CP-39602 - Design: Directory accuracy vendor export](https://certifyos.atlassian.net/wiki/spaces/Engineerin/pages/2252767300/CP-39602+-+Design+Directory+accuracy+vendor+export), pending review; companion `vendor-export-concepts.md` not yet updated to the rewrite; vendor ingestion — not started.
