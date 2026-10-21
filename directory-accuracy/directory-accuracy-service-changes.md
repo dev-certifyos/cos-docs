@@ -285,8 +285,8 @@ Nothing below is built. The code still implements the earlier own-selection desi
 ## Pending outside the code
 
 - **Rotate the Atlassian API token** pasted in chat on 2026-10-21.
-- **Push cos-docs** (`928d4b1` and the uncommitted concepts update).
-- **Phase 1 design doc follow-ups from the code:** state diagram and step 4 gain the `EGRESS_REQUESTED → SCHEDULED` edge for an unusable reuse; audit table gains `EXPORT_REUSE_REFUSED`; step 3 gains the 12-wait cap on `429`; step 6 gains `SELECTION_COUNTS_MISSING`.
+- **Push cos-docs:** the tracker and design-doc commits from 2026-10-22 (`642f820` to the latest).
+- **Publish the phase 1 design doc as version 10:** local `vendor-export.md` updated 2026-10-22 (`ab809aa`); run `publish_confluence_page.py` (dry run, then `--apply`). The flow PNG still shows the old labels for 12a and 15b.
 - **Raise ask 5's extension with the egress team** on CP-41070: `failureReason` (reason code, null on `COMPLETED`, also as a message attribute) and the `selection` block (`requested`, `distinct`, `matched`, `unmatched`, `parts`, `listUsedUri`, `reusedFrom`) on every completion event. Why: tells an empty selection from a failure, gives reconciliation its expected count without a status call.
 - **Send DevOps the new names** for the Pulumi stack: finding 108 in `docs/decisions.md` lists them (instance groups, service accounts, secrets, hostname, registry, Pub/Sub subscription and dead-letter topic, database name).
 - **api-layer:** switch the saved-filter store on per environment and give egress its read key (CP-44214); operators create filters once the filter module is in use.
