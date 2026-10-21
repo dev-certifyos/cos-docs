@@ -102,7 +102,9 @@ Nothing below is built. The code still implements the earlier own-selection desi
 
 - All changes are in `directory-accuracy-service`; egress is owned by another team and is read, not changed.
 - One branch `feature/saved-filter-selection` (the `feature/<kebab-title>` rule in `AGENTS.md`), one PR; Conventional Commits as on `main` (`feat(export): …`).
-- Progress: phase 1 committed 2026-10-22 (`7dfb888`).
+- Progress:
+  - Phase 1 committed 2026-10-22 (`7dfb888`).
+  - Phases 2 and 3 committed together 2026-10-22 (`3fc82fd`): neither compiles without the other, because the jobs use every type the domain change removes. The `/npis` endpoint, `BatchViews`, the `npis` collection and indexes, and `Ids.npiId` went with them for the same reason.
 - Phases, one commit each, each compiling all three source sets with its own test changes; stop after each phase and show compile, Spotless, Checkstyle, SpotBugs, and the leftover search.
   1. Client contracts: `EgressExportRequest.selection`, `EgressStatusResponse.selection`, `EgressEvent.failureReason` and `selection`.
   2. Domain: schedule `filterId`, preview and criteria classes deleted, batch `Selection`, states, `FailedStep`, `Reconciliation.selected`, audit event types.
@@ -158,7 +160,7 @@ Nothing below is built. The code still implements the earlier own-selection desi
 - `export/batch/ExportBatch.java`:
   - `Selection` record becomes `filterId`, `requested`, `distinct`, `unmatched`, `parts`, `reusedFrom`, `listUsedUri`, `reEvaluated` (only when a retry could not reuse), `completedAt`. Drop `criteria` and `page`.
   - `FailedStep`: remove `SELECT`; keep `EGRESS`.
-  - Remove the unused `acknowledgedAt` and `inboundBatchId` fields; acknowledgement lives in module 2's `inboundFiles[]`.
+  - `acknowledgedAt` and `inboundBatchId` stay: ingestion's `InboundClaims.acknowledge` writes both onto the batch row and the batch view shows them. Removing them is a separate decision.
   - `scheduled(...)` factory takes `filterId` instead of `SelectionCriteria`.
 - `export/batch/Reconciliation.java`: rename `registered` to `selected` (field, factory, document key, Javadoc).
 - `export/batch/BatchLifecycle.java`:
@@ -186,7 +188,7 @@ Nothing below is built. The code still implements the earlier own-selection desi
     - First attempt: `{ "source": "SAVED_FILTER", "filterId": <batch.filterId>, "listUsed": true }`.
     - Retry (`attempt > 1`): `{ "reuseSelectionFrom": <previous correlationId>, "listUsed": true }`. The previous id is `batch.egress().correlationId()`, the value the cancel-before-retry already reads; read it before the new attempt overwrites it.
     - Egress `400 INVALID_REQUEST` on a reuse request with one of the three unusable-source messages (see *What egress `main` already has*): send the `filterId` form again and set `selection.reEvaluated = true`. Any other `400` fails the batch.
-  - `429 SELECTION_QUOTA_EXCEEDED`: schedule a new `RequestEgressJob` at now + `Retry-After` (300 seconds), same pattern as `IngestionJobEnqueuer` ("each wait is a new job"), so JobRunr's retries stay untouched.
+  - `429 SELECTION_QUOTA_EXCEEDED`: schedule a new `RequestEgressJob` at now + `Retry-After` (300 seconds), same pattern as `IngestionJobEnqueuer` ("each wait is a new job"), so JobRunr's retries stay untouched. Built with `quotaWait` on the job request and `JobIds.quotaWait`; after 12 waits (one hour) the `429` propagates to JobRunr's retries.
   - `403 SELECTION_SOURCE_DISABLED` and any other `400`: mark the batch `FAILED` at `EGRESS`, alert E4.
   - Keep cancel-before-retry, template pin, `409` handling, destination, deadline scheduling as they are.
 - `export/jobs/DeadlineCheckJob.java`:
@@ -199,7 +201,7 @@ Nothing below is built. The code still implements the earlier own-selection desi
   - Remove `ExportNpiRepository`.
   - Compare object metadata `totalRecords` with `batch.selection().distinct()`.
   - Write `reconciliation.selected`; audit `EXPORT_RECONCILED`.
-  - When `selection` is missing (an event without the block and no deadline check yet): one egress status call to fill it, then reconcile. Record in `docs/decisions.md`.
+  - When `selection` is missing (an event without the block and no deadline check yet): one egress status call to fill it, then reconcile. Built: the counts are recorded with the delivery; a status without the block fails the batch with `SELECTION_COUNTS_MISSING`; a failed status call propagates for JobRunr's retry. Record in `docs/decisions.md`.
 - `export/jobs/ReconcilerJob.java`: `SCHEDULED` → `RequestEgressJob`; `EGRESS_COMPLETED` → `FinishJob`; remove the `NPIS_SELECTED` case and the `SelectJob` reference; update the Javadoc.
 - `export/jobs/BatchFinalFailureFilter.java`: remove the `SelectJob` → `SELECT` mapping; `RequestEgressJob`, `DeadlineCheckJob`, `FinishJob` map to `EGRESS`.
 - `export/jobs/BatchJobSupport.java` and `JobIds`: drop anything select-specific.
