@@ -1,2 +1,5 @@
 external/
 .DS_Store
+
+__pycache__/
+confluence-body.storage.html
