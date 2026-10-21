@@ -70,6 +70,12 @@ Tracker written 2026-10-21, updated 2026-10-22 after reading egress `main`. Repo
 - Rejected values: the later exclusion feeds module 1's saved filter (two places).
 - 22 `/vendor-review` paths now `/v1/vendor-review`.
 
+### Phase 1 design doc version 10 (2026-10-22)
+
+- Published from `vendor-export.md` (`ab809aa`): retry to `SCHEDULED` with the schedule's current filter id, `REUSE_SOURCE_UNUSABLE` re-request and `EXPORT_REUSE_REFUSED`, the `429` wait, `EGRESS_REFUSED`, `SELECTION_COUNTS_MISSING`, `rowExpansionKeys` as a string, egress ask 1 built, the `cloud-run-jobs` requirement.
+- Flow image redrawn with a side-path row (`bd8bd4f`, rendered by `draw_flow_steps.py`); attachment `vendor-export-flow-steps.png` now version 2.
+- Unused attachments `image-20260924-113650.png` and `vendor-export-lifecycle.png` deleted (to the page's trash).
+
 ### Lifecycle artifact
 
 - https://claude.ai/artifact/3y3YLP3EutD9yYtPy7qNvf (same artifact as the old `claude.ai/code/artifact/18057e71…` link), version 2.
@@ -284,16 +290,13 @@ Nothing below is built. The code still implements the earlier own-selection desi
 
 ## Pending outside the code
 
-- **Rotate the Atlassian API token** pasted in chat on 2026-10-21.
-- **Push cos-docs:** the tracker and design-doc commits from 2026-10-22 (`642f820` to the latest).
-- **Publish the phase 1 design doc as version 10:** local `vendor-export.md` updated 2026-10-22 (`ab809aa`); run `publish_confluence_page.py` (dry run, then `--apply`). The flow PNG still shows the old labels for 12a and 15b.
+- **Rotate the Atlassian API tokens** pasted in chat on 2026-10-21 and 2026-10-22.
 - **Raise ask 5's extension with the egress team** on CP-41070: `failureReason` (reason code, null on `COMPLETED`, also as a message attribute) and the `selection` block (`requested`, `distinct`, `matched`, `unmatched`, `parts`, `listUsedUri`, `reusedFrom`) on every completion event. Why: tells an empty selection from a failure, gives reconciliation its expected count without a status call.
 - **Send DevOps the new names** for the Pulumi stack: finding 108 in `docs/decisions.md` lists them (instance groups, service accounts, secrets, hostname, registry, Pub/Sub subscription and dead-letter topic, database name).
 - **api-layer:** switch the saved-filter store on per environment and give egress its read key (CP-44214); operators create filters once the filter module is in use.
 - **Cleanup, optional:**
   - Delete the GitHub branch `chore/rename-directory-accuracy-service`.
   - Delete the empty Terraform state at `gs://certifyos-tf-state-development/vendor-exchange-internal/state/` (0 resources, left by a `terraform init` on 2026-10-05).
-  - Remove the unused attachments on the phase 1 Confluence page (`image-20260924-113650.png`, `vendor-export-lifecycle.png`).
 - **The other developer:** the local rename steps were shared on 2026-10-21 (folder, remote, clean build, `.env`, local Mongo database, IDE, rebasing branches).
 
 ## Open questions
