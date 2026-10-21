@@ -96,12 +96,12 @@ flowchart TD
     TOP -->|"11a deliver"| SUB
     SUB -->|"11b push through LB"| E
     SUB -.->|"after 5 failed deliveries"| DLQ
-    E -->|"12a EGRESS_COMPLETED with selection counts; EMPTY if NO_MATCHING_PRACTITIONERS; else FAILED; delete deadline job"| B
+    E -->|"12a EGRESS_COMPLETED with selection counts; EMPTY if NO_MATCHING_PRACTITIONERS; SCHEDULED as next attempt if REUSE_SOURCE_UNUSABLE; else FAILED; delete deadline job"| B
     E -->|"12b enqueue (COMPLETED only)"| FJ
     FJ -->|"13 read object metadata"| VB
     FJ -->|"14 file count vs selection count, DELIVERED, delete deadline job"| B
     DJ -.->|"15a only if still EGRESS_REQUESTED: one status call"| EG
-    DJ -.->|"15b EGRESS_COMPLETED (DEADLINE), EMPTY, or FAILED"| B
+    DJ -.->|"15b EGRESS_COMPLETED (DEADLINE), EMPTY, SCHEDULED as next attempt, or FAILED"| B
     DJ -.->|"15c enqueue if COMPLETED"| FJ
     DJ -.->|"15d still running at check 1: schedule check 2 at +48h"| DJ
     RC -.->|"16 find stale non-terminal rows, re-enqueue their job"| B
@@ -178,8 +178,8 @@ flowchart TD
     - `409`: the prior attempt already reached a terminal state. If it reached `COMPLETED`, its file may already sit at the destination or land shortly — check the destination object. A complete object is the answer we wanted: move the batch to `EGRESS_COMPLETED`, enqueue `FinishJob`, and stop; no second export. Otherwise proceed.
   - **Pin the template — once per batch, before anything is sent.** If the batch row does not yet carry a pin, read the tenant's template row once (`GET /egress-templates/{templateId}`, through api-layer) and write onto the batch row: `templateVersion`, `mappingsCsvUrl` (version-specific, e.g. `…/v3/mappings.csv`), `separator`, `outputFormat`, `rowExpansionKeys`. The pin is written before the export call, so a crash between the two leaves a rerun that reads the saved pin instead of re-resolving the row. A retry finds the pin already present and never touches the template row again; if the live row's version has moved since, log it — the pin makes the drift harmless, and the new version applies from the next batch.
   - Call the egress export endpoint (`POST /api/v1/egress/export`) with the tenant id, a `selection` object naming the batch's `filterId` with `listUsed: true`, the tenant's `egressTemplateId`, **the pinned `mappingsCsvUrl`, `separator`, `outputFormat`, and `rowExpansionKeys`** (all existing request fields — **egress supports this today**), and a `correlationId` of `<exportBatchId>-r<attempt>`, for example `org-xyz-candor-2026-10-001-r1`.
-  - **Needs egress change:** the `selection` object (CP-41069). Today egress accepts only an NPI list of at most 100.
-  - On a retry (`attempt > 1`) the `selection` names the previous attempt instead: `reuseSelectionFrom: <previous correlationId>`. Egress copies that attempt's frozen list, so every attempt of one batch exports the same practitioners. If egress refuses the reuse (`400`: the earlier list is unfinished or past its 7 days), the job sends `filterId` again and records `selection.reEvaluated = true` on the batch.
+  - The `selection` object is built in egress (CP-41069, merged); this module sends no NPI list.
+  - On a retry (`attempt > 1`) the `selection` names the previous attempt instead: `reuseSelectionFrom: <previous correlationId>`. Egress copies that attempt's frozen list, so every attempt of one batch exports the same practitioners. If egress refuses the reuse at request time (`400` saying the earlier attempt is not a selection of this tenant, never finished, or its list has expired after 7 days), the job sends `filterId` again in the same run and records `selection.reEvaluated = true` on the batch.
   - If egress answers `202`, store the job reference it returns and move the batch to `EGRESS_REQUESTED`, in one write. If egress answers `409`, it already has a job for this correlation id; take that job's reference and do the same write.
   - Schedule one future job, `DeadlineCheckJob`, to run `egressDeadlineHours` (default 6) from now. This is the safety net for step 4: if the completion event never arrives, this job is the only thing that will notice. Until then nothing else runs for this batch.
   - Egress does the rest on its own: one Spanner row per practitioner, one file row per practice location (`rowExpansionKeys: ["locations"]`), columns from the template's mappings CSV. It writes the file to its own bucket as `gs://<egress bucket>/practitioner/<tenantId>/<correlationId>/export.csv`. **Egress supports this today.**
@@ -203,9 +203,9 @@ flowchart TD
 - **Why one deadline and not polling:** a poll has no natural end. A deadline is set once and exists only to answer "did the event fail to arrive". The normal path never touches it.
 
 - **What if it fails:**
-  - Egress answers `429 SELECTION_QUOTA_EXCEEDED` (another large export for this tenant is running): the job throws and JobRunr retries it no sooner than egress's `Retry-After`.
-  - Egress answers `403 SELECTION_SOURCE_DISABLED` (the capability is switched off in egress): the batch moves to `FAILED` with the egress error and alert E4 fires.
-  - Egress answers `5xx` or `429`: the job throws and JobRunr retries it. The retry usually gets `409`, because egress accepted the first call, and completes normally.
+  - Egress answers `429 SELECTION_QUOTA_EXCEEDED` (another large export for this tenant is running): the job schedules a new request job at egress's `Retry-After` (300 seconds) and the batch stays `SCHEDULED`. Each wait is a new job, so JobRunr's retries are not spent; after 12 waits (one hour) the `429` is left to JobRunr's retries.
+  - Egress answers `403 SELECTION_SOURCE_DISABLED` (the capability is switched off in egress), or a `400` that is not a refused reuse: the batch moves to `FAILED` at once with cause `EGRESS_REFUSED` and egress's code and message as `lastError`, and alert E4 fires. Asking again cannot change the answer.
+  - Egress answers `5xx`: the job throws and JobRunr retries it. The retry usually gets `409`, because egress accepted the first call, and completes normally.
   - The cancel call fails with `5xx`: the job throws and JobRunr retries it. The retry's cancel finds the job already `CANCELLED` and gets `409`, which is the terminal answer, and the job proceeds. Cancelling is safe to repeat.
   - Our instance dies after egress accepted but before we wrote the batch row: JobRunr re-runs the job, it gets `409`, and it completes the write. The state and the correlation id are written together, so the row is never half-updated.
   - The template read for the pin fails: the job throws and JobRunr retries it. Once the pin is written it is never read again from DAL, so this failure mode exists only on a batch's first attempt.
@@ -224,6 +224,12 @@ flowchart TD
   - If no batch is found, or the batch's state is already past `EGRESS_REQUESTED`, the handler answers `200` and logs the message. It is either a duplicate delivery or not ours, and answering `200` stops Pub/Sub from sending it again.
   - If the batch's state is `EGRESS_REQUESTED` and the phase is `COMPLETED`, the handler moves the batch to `EGRESS_COMPLETED` in one write, recording the output path, the counts, egress's `selection` block, and `completionSource = EVENT`. The audit events `EXPORT_EVENT_RECEIVED` and `EXPORT_EGRESS_COMPLETED` are written in the same transaction. Then it enqueues `FinishJob` and answers `200`.
   - If the batch's state is `EGRESS_REQUESTED`, the phase is `FAILED`, and `failureReason` is `NO_MATCHING_PRACTITIONERS`, the handler moves the batch to `EMPTY` with `EXPORT_BATCH_EMPTY`, deletes the pending deadline job, fires alert E8, and answers `200`.
+  - If the batch's state is `EGRESS_REQUESTED`, the phase is `FAILED`, and `failureReason` is `REUSE_SOURCE_UNUSABLE`, egress accepted a retry's `reuseSelectionFrom` and then found the earlier list gone or empty.
+    - The same correlation id cannot be sent again: egress answers `409` for a known id.
+    - So the handler moves the batch back to `SCHEDULED` as the next attempt, writes `EXPORT_REUSE_REFUSED`, deletes the pending deadline job, and enqueues `RequestEgressJob`.
+    - That job asks to reuse the failed attempt; egress refuses at once (its selection never finished), and the job sends `filterId` and records `selection.reEvaluated = true`.
+    - No operator is involved and no alert fires.
+  - The reason code is read from `failureReason`, or from the `selection` block's when the top level has none. Egress stores a reason as `REASON` or `REASON (detail)`; only the code before the detail is compared.
   - If the batch's state is `EGRESS_REQUESTED` and the phase is `FAILED` for any other reason, the handler moves the batch to `FAILED` in one write, with `failedStep = EGRESS`, `cause = EGRESS_FAILED`, and egress's failure message as `lastError`. The audit events `EXPORT_EVENT_RECEIVED` and `EXPORT_BATCH_FAILED` are written in the same transaction.
   - It then deletes the pending deadline job, fires alert E4, and answers `200`. Nothing else runs for this batch until an operator retries (step 8).
   - The handler does nothing heavy itself. All work happens in the job it enqueued.
@@ -247,7 +253,7 @@ flowchart TD
   - If the state is already past `EGRESS_REQUESTED`, the event arrived and the job exits. This is the normal outcome.
   - If the state is still `EGRESS_REQUESTED`, the job makes one call to the egress status endpoint.
   - If egress reports `COMPLETED` with `gcs_complete = true`, the job moves the batch to `EGRESS_COMPLETED` with `completionSource = DEADLINE` and the status response's `selection` block, writes `EXPORT_EGRESS_COMPLETED` and `EXPORT_EVENT_MISSED` in the same transaction so we know the event path failed for this batch, and enqueues `FinishJob`.
-  - If egress reports `FAILED` with `NO_MATCHING_PRACTITIONERS`, the job moves the batch to `EMPTY` the same way the event handler does. Any other `FAILED`: the job moves the batch to `FAILED` the same way the event handler does (`failedStep = EGRESS`, `cause = EGRESS_FAILED`, egress's message as `lastError`), writes `EXPORT_BATCH_FAILED` and `EXPORT_EVENT_MISSED` in the same transaction, and fires alert E4.
+  - If egress reports `FAILED` with `NO_MATCHING_PRACTITIONERS`, the job moves the batch to `EMPTY` the same way the event handler does; with `REUSE_SOURCE_UNUSABLE`, it moves the batch back to `SCHEDULED` as the next attempt the same way. Any other `FAILED`: the job moves the batch to `FAILED` the same way the event handler does (`failedStep = EGRESS`, `cause = EGRESS_FAILED`, egress's message as `lastError`), writes `EXPORT_BATCH_FAILED` and `EXPORT_EVENT_MISSED` in the same transaction, and fires alert E4.
   - If egress reports the job is still running, the job writes `EXPORT_EGRESS_STALE`, fires alert E3, and schedules a second `DeadlineCheckJob` for `egressAbandonHours` (default 48) after the request.
   - If the second check also finds egress still running, the job first requests cancellation of the stored `egress.correlationId` (best effort — a `409` means the job just reached a terminal state, and the next event or retry handles it), then moves the batch to `FAILED` with cause `EGRESS_DID_NOT_FINISH`. Cancelling here stops an abandoned pipeline from running on, and makes the retry's own cancel a cheap `409`. From here an operator decides.
 
@@ -266,6 +272,7 @@ flowchart TD
   - Read the object at `gs://<vendorBucket>/from/<tenantId>/<tenantId>_<exportBatchId>_<yyyyMMdd>.csv`, the `destination` this batch sent to egress in step 3 and stored on the batch row. If the object is missing, move the batch to `FAILED` with cause `FILE_NOT_FOUND`.
   - Read the metadata egress set on the object: `complete=true`, `totalRecords` (the number of practitioners), `totalRows` (the number of file rows), and `correlationId` (the attempt that produced the file). Record the producing attempt on the batch row as `egress.fileProducedBy`.
   - Compare `totalRecords` with egress's selection count already on the batch row (`selection.distinct`, recorded from the event or the deadline check). Write the result to the batch row as `reconciliation.selected`, `reconciliation.inFile`, and `reconciliation.match`.
+  - If the batch holds no selection count (the event carried no `selection` block), make one egress status call and record its `selection` block with the delivery. A status without one moves the batch to `FAILED` with cause `SELECTION_COUNTS_MISSING`.
   - If the two counts differ, `match` is `false`, alert E6 fires, and an operator compares the file with the list-used file (`selection.listUsedUri`, kept 7 days by egress).
   - Move the batch to `DELIVERED` with the file facts and counts, delete the pending deadline job, and write `EXPORT_BATCH_DELIVERED`.
 
@@ -311,7 +318,8 @@ JobRunr retries a job that throws, re-runs a job whose instance died, and keeps 
 **8. Retry and supersede — operator actions.**
 
 - **Retry** (`POST /v1/vendor-exports/{id}/retry`), for a batch in `FAILED`:
-  - Keeps the batch id, adds one to `attempt`, puts the batch back in the state it failed from, and enqueues that state's job.
+  - Keeps the batch id, adds one to `attempt`, puts the batch back in `SCHEDULED`, and enqueues `RequestEgressJob`.
+  - Copies the schedule's current `filterId` onto the batch. It is used only when egress refuses the reuse below, which it always does after `FILTER_NOT_USABLE`: an operator fixes a wrong filter id on the schedule and retries the batch.
   - The retry asks egress to reuse the previous attempt's frozen list (`reuseSelectionFrom`), so the practitioner set does not change. The vendor never sees a different batch id.
   - The endpoint itself only flips state and enqueues. Cancelling the previous attempt and the destination preflight live inside `RequestEgressJob` (step 3), so they get JobRunr's retry and backoff if egress is unreachable at retry time — which is likely, given the batch just failed there.
 - **Supersede** (`POST /v1/vendor-exports/{id}/supersede`), for a batch in `DELIVERED` whose file turned out to be wrong:
@@ -571,7 +579,7 @@ Request:
   "mappingsCsvUrl": "gs://egress-templates/org-xyz/c9a418b5-348e-44e6-95f0-04c45f527367/v3/mappings.csv",
   "separator": ";",
   "outputFormat": "csv",
-  "rowExpansionKeys": ["locations"],
+  "rowExpansionKeys": "[\"locations\"]",
   "selection": {
     "source": "SAVED_FILTER",
     "filterId": "flt_0f8fad5b-d9cb-469f-a165-70867728950e",
@@ -586,8 +594,8 @@ Request:
 ```
 
 - `templateId` — the tenant's vendor template, provisioned by this module at enablement (step 0). Egress does not resolve columns from it: it uses the id for the Activity Center display and the output file's metadata only.
-- `mappingsCsvUrl`, `separator`, `outputFormat`, `rowExpansionKeys` — the batch's pinned template values (step 3), all existing request fields. Egress validates the URL is tenant-scoped (`GcsPathValidator.java:49-59`), stores all four on its job metadata at request time, and builds the file from that stored copy (`TemplateMappingExportPipeline.java:524`). Every attempt of a batch sends the same pinned values, so a retry is built from a byte-identical definition.
-- `selection` — the batch's `filterId`, and `listUsed: true` so egress writes the list-used file. **Needs egress change** (CP-41069).
+- `mappingsCsvUrl`, `separator`, `outputFormat`, `rowExpansionKeys` — the batch's pinned template values (step 3), all existing request fields. `rowExpansionKeys` is a JSON array written as a string, because egress declares the field a string and parses it itself. Egress validates the URL is tenant-scoped (`GcsPathValidator.java:49-59`), stores all four on its job metadata at request time, and builds the file from that stored copy (`TemplateMappingExportPipeline.java:524`). Every attempt of a batch sends the same pinned values, so a retry is built from a byte-identical definition.
+- `selection` — the batch's `filterId`, and `listUsed: true` so egress writes the list-used file (CP-41069, built in egress).
 - On a retry the `selection` reuses the previous attempt's frozen list instead:
 
 ```json
@@ -597,10 +605,12 @@ Request:
 | Egress answer | Meaning | This job |
 | --- | --- | --- |
 | `202` / `409` | Accepted / already accepted for this correlation id | Success (below) |
-| `400` on `reuseSelectionFrom` | Earlier list unfinished, expired (7 days), or missing | Send `filterId` again; `selection.reEvaluated = true` |
-| `400` otherwise | Request breaks a rule (for example the filter's entity type) | Batch `FAILED`; E4 |
-| `403 SELECTION_SOURCE_DISABLED` | Capability switched off in egress | Batch `FAILED`; E4 |
-| `429 SELECTION_QUOTA_EXCEEDED` | Another large export for this tenant is running | Throw; JobRunr retries after `Retry-After` |
+| `400 INVALID_REQUEST`, message `selection.reuse_selection_from` followed by "does not name a selection export of this tenant and type", "names a selection that is not finished" or "names a selection whose list has expired" | The earlier attempt's list cannot be reused | Send `filterId` again in the same run; `selection.reEvaluated = true` |
+| `400` otherwise | Request breaks a rule (for example the filter's entity type) | Batch `FAILED`, cause `EGRESS_REFUSED`; E4 |
+| `403 SELECTION_SOURCE_DISABLED` | Capability switched off in egress | Batch `FAILED`, cause `EGRESS_REFUSED`; E4 |
+| `429 SELECTION_QUOTA_EXCEEDED` | Another large export for this tenant is running | New request job at `Retry-After` (300 s), batch stays `SCHEDULED`; after 12 waits, left to JobRunr's retries |
+
+- Egress's error body is `{ "error", "message", "details", "retryable" }`.
 - `destination` — where the finished file must land. **Needs egress change:** the request has no destination field today; output always goes to `gs://<egress bucket>/practitioner/<tenantId>/<correlationId>/export.csv` (`DataflowJobLauncherService.java:619-621`). The copy to the destination is create-only (`ifGenerationMatch: 0`): a `412` is a no-op success, the object metadata carries the producing `correlationId`, and the copy is skipped when the job's status is `CANCELLED`.
 - The bucket is our `vendorBucket` setting. The object name is built here from the tenant id, the batch id, and today's date in the schedule's timezone, so the filename is fixed before egress runs.
 
@@ -657,6 +667,7 @@ Handler contract:
 | Batch state past `EGRESS_REQUESTED` | `200` | Acknowledged; duplicate, no effect |
 | Batch state `EGRESS_REQUESTED`, phase `COMPLETED` | `200` | Batch → `EGRESS_COMPLETED` (`completionSource = EVENT`, `selection` block recorded) with `EXPORT_EVENT_RECEIVED` and `EXPORT_EGRESS_COMPLETED` in one transaction; `FinishJob` enqueued |
 | Batch state `EGRESS_REQUESTED`, phase `FAILED`, `failureReason = NO_MATCHING_PRACTITIONERS` | `200` | Batch → `EMPTY` with `EXPORT_EVENT_RECEIVED` and `EXPORT_BATCH_EMPTY` in one transaction; deadline job deleted; alert E8 |
+| Batch state `EGRESS_REQUESTED`, phase `FAILED`, `failureReason = REUSE_SOURCE_UNUSABLE` | `200` | Batch → `SCHEDULED` as `attempt + 1` with `EXPORT_EVENT_RECEIVED` and `EXPORT_REUSE_REFUSED` in one transaction; deadline job deleted; `RequestEgressJob` enqueued for the new attempt |
 | Batch state `EGRESS_REQUESTED`, phase `FAILED`, any other reason | `200` | Batch → `FAILED` (`failedStep = EGRESS`) with `EXPORT_EVENT_RECEIVED` and `EXPORT_BATCH_FAILED` in one transaction; deadline job deleted; alert E4 |
 | Exception before the state write | `500` | Pub/Sub redelivers with backoff; the state check makes the redelivery safe |
 | Crash after the state write, before the enqueue | none | Row sits in `EGRESS_COMPLETED` with no job; a redelivery is acknowledged as a duplicate; the hourly reconciler enqueues `FinishJob` |
@@ -673,7 +684,7 @@ Response `200`:
   "selection": { "state": "RESOLVED", "distinct": 1240, "matched": 1240, "unmatched": 0, "listUsedUri": "gs://…/list-used.csv", "failureReason": null } }
 ```
 
-- `phase` values: `QUEUED, SEEDING, SEED_COMPLETED, EXPORTING_NDJSON, EXPORTING_TEMPLATE, COMPLETED, FAILED` (`openapi.yaml:810`). Only `COMPLETED` with `gcs_complete = true` advances, recording `selection`; `FAILED` with `selection.failureReason = NO_MATCHING_PRACTITIONERS` → `EMPTY`; any other `FAILED` fails; anything else at check 1 alerts and schedules check 2; anything else at check 2 fails the batch.
+- `phase` values: `QUEUED, SEEDING, SEED_COMPLETED, EXPORTING_NDJSON, EXPORTING_TEMPLATE, COMPLETED, FAILED` (`openapi.yaml:810`). Only `COMPLETED` with `gcs_complete = true` advances, recording `selection`; `FAILED` with `selection.failureReason = NO_MATCHING_PRACTITIONERS` → `EMPTY`; with `REUSE_SOURCE_UNUSABLE` → `SCHEDULED` as the next attempt; any other `FAILED` fails; anything else at check 1 alerts and schedules check 2; anything else at check 2 fails the batch.
 - Check 2, before failing the batch: `POST {egressBaseUrl}/api/v1/egress/jobs/practitioner/{tenantId}/{correlationId}/cancel` (best effort; `202` or `409` both proceed).
 - **Audit written:** on `COMPLETED`, `EXPORT_EGRESS_COMPLETED` (`completionSource = DEADLINE`) and `EXPORT_EVENT_MISSED` in the `EGRESS_COMPLETED` transition; on still running, `EXPORT_EGRESS_STALE` (check 1) or `EXPORT_BATCH_FAILED` with cause `EGRESS_DID_NOT_FINISH` (check 2), plus `EXPORT_PRIOR_ATTEMPT_CANCELLED` or `EXPORT_PRIOR_ATTEMPT_CANCEL_REJECTED` for the cancel.
 
@@ -683,6 +694,7 @@ Response `200`:
 - Filename: `<tenantId>_<exportBatchId>_<yyyyMMdd>.csv`; `yyyyMMdd` is the date `RequestEgressJob` ran, in the schedule's timezone (contract proposal §3.3). Path: `gs://<vendorBucket>/from/<tenantId>/<filename>`. Both are stored on the batch row as `egress.destination` when the request is sent, and the finish job reads them from there.
 - Reads object metadata egress sets on completion: `complete=true`, `totalRecords`, `totalRows`, `templateId` (`TemplateMappingExportPipeline.java:626-637`), and `correlationId` (**Needs egress change**, part of ask 6) — recorded on the batch row as `egress.fileProducedBy`, since with the create-only copy the file may come from an earlier attempt than the current one.
 - Reconciles by count: `totalRecords` versus `selection.distinct` on the batch row, written to the batch row's `reconciliation` object. Not equal → `reconciliation.match = false`, alert E6.
+- No `selection.distinct` on the batch: one status call (`GET …/status/practitioner/{tenantId}/{correlationId}`); its `selection` block is recorded with the delivery. No block there either → `FAILED`, cause `SELECTION_COUNTS_MISSING`, E4.
 - The CSV is the only object written to the vendor folder for a batch. No helper files of any kind. **Needs egress change:** egress's delivery today always writes `<filename>.manifest.json` beside the file (`SftpDeliveryService.java`); for a request-supplied destination it must write only the file.
 - **Audit written:** `EXPORT_RECONCILED`; `EXPORT_BATCH_DELIVERED` in the transaction that flips the state.
 
@@ -692,11 +704,11 @@ Response `200`:
 
 **Step 8 — Retry and supersede.**
 
-- `POST /v1/vendor-exports/{exportBatchId}/retry` — from `FAILED`; body `{ "reason": "…" }` mandatory. Adds one to `attempt`, moves the batch to the state its `failedStep` names, enqueues that state's job. Response `202 { "exportBatchId", "attempt", "jobId" }`.
+- `POST /v1/vendor-exports/{exportBatchId}/retry` — from `FAILED`; body `{ "reason": "…" }` mandatory. Adds one to `attempt`, copies the schedule's current `filterId` onto the batch, moves the batch to `SCHEDULED`, enqueues `RequestEgressJob`. Response `202 { "exportBatchId", "attempt", "jobId" }`.
 
 | `failedStep` | Set by | Retry moves the batch to | Job enqueued |
 | --- | --- | --- | --- |
-| `EGRESS` | egress `FAILED` (event or deadline), `EGRESS_DID_NOT_FINISH`, `404` on request, or `FILE_NOT_FOUND` in the finish job | `SCHEDULED` | `RequestEgressJob` under `-r<attempt>`, reusing the previous frozen list |
+| `EGRESS` | egress `FAILED` (event or deadline), `EGRESS_REFUSED` (`403`, or a `400` that is not a refused reuse), `EGRESS_DID_NOT_FINISH`, `FILE_NOT_FOUND` or `SELECTION_COUNTS_MISSING` in the finish job, or retries exhausted | `SCHEDULED` | `RequestEgressJob` under `-r<attempt>`, reusing the previous frozen list |
 
 - A missing file is an `EGRESS` failure, not a finish failure: the fix is to ask egress again, and egress's frozen list is reused.
 - `POST /v1/vendor-exports/{exportBatchId}/supersede` — from `DELIVERED`; body `{ "reason": "…" }` mandatory. Creates `seq + 1` in `SCHEDULED`, enqueues its `RequestEgressJob`, marks the old batch `SUPERSEDED`, and sets the schedule's `lastBatchId` to the new batch. Response `201 { "exportBatchId", "jobId" }`.
@@ -753,7 +765,7 @@ Rules:
 - `filterId` is checked for form only on every `PUT`; the filter's content was checked by api-layer when it was saved.
 - `cadence` and `timezone` changes recompute `nextDueAt` at once (*Contracts → step 0*). A batch already created is unaffected.
 - `egressTemplateId` must belong to the tenant — checked on `PUT` through api-layer, and enforced by egress too (`ExportOrchestrationService.java:197-215`).
-- Egress-side settings we depend on: the tenant is in `egress.template-pipeline-tenants` (`application.properties:315-316`); the rate limit excludes our identity (`application.properties:267`); `egress.selection.saved-filter.enabled` is on and `egress.selection.max-size` covers the tenant's count. On api-layer, `api-layer.saved-filter.enabled` is on. All are *Rollout* items.
+- Egress-side settings we depend on: the tenant is in `egress.template-pipeline-tenants` (`application.properties:315-316`); the rate limit excludes our identity (`application.properties:267`); `egress.selection.saved-filter.enabled` is on, `egress.selection.max-size` covers the tenant's count, and egress runs the `cloud-run-jobs` execution method (egress refuses a selection under any other). On api-layer, `api-layer.saved-filter.enabled` is on. All are *Rollout* items.
 
 ## Data model and migration
 
@@ -825,7 +837,8 @@ Rules:
     "unmatched": 0,
     "parts": 1,
     "reusedFrom": null,
-    "listUsedUri": "gs://<egress bucket>/practitioner/org-xyz/org-xyz-candor-2026-10-001-r1/list-used.csv"
+    "listUsedUri": "gs://<egress bucket>/practitioner/org-xyz/org-xyz-candor-2026-10-001-r1/list-used.csv",
+    "completedAt": "2026-10-01T07:11:52Z"
   },
 
   "egress": {
@@ -864,11 +877,11 @@ Rules:
 }
 ```
 
-- `selection.filterId` is copied at batch creation, so a later schedule change never rewrites history. The counts and `listUsedUri` are copied from egress's event or status; `reEvaluated` is present only when a retry could not reuse the earlier list.
+- `selection.filterId` is copied at batch creation, so a later schedule change never rewrites a batch in flight. An operator retry copies the schedule's current id, so a fixed filter id reaches a failed batch. The counts and `listUsedUri` are copied from egress's event or status; `reEvaluated` is present only when a retry could not reuse the earlier list.
 - `egress.deadlineJobId` lets `FinishJob` delete the pending deadline check. `egress.completionSource` is `EVENT` or `DEADLINE`; `DEADLINE` means the event path failed for that batch.
 - Present only when set: `failedStep`, `lastError` (on `FAILED`); `supersededBy` (on `SUPERSEDED`); `inboundFiles[]` (written by the ingestion module).
 - Indexes: unique `(tenantId, vendor, period, seq)`; `(state, updatedAt)` for the reconciler; `(egress.correlationId)` for the event handler; `(tenantId, deliveredAt)` for reads.
-- States: `SCHEDULED → EGRESS_REQUESTED → EGRESS_COMPLETED → DELIVERED`; terminal side states `EMPTY`, `FAILED`, `SUPERSEDED`. Every transition is a compare-and-set on `state`.
+- States: `SCHEDULED → EGRESS_REQUESTED → EGRESS_COMPLETED → DELIVERED`; terminal side states `EMPTY`, `FAILED`, `SUPERSEDED`. `EGRESS_REQUESTED → SCHEDULED` as the next attempt when egress reports `REUSE_SOURCE_UNUSABLE`; `FAILED → SCHEDULED` on retry. Every transition is a compare-and-set on `state`.
 
 **Retention:** schedules, batches, and events kept 7 years (v2 D2-20); a disabled schedule stays. JobRunr deletes succeeded jobs after 36 hours by default and keeps failed ones until cleared; its collections are operational, not audit.
 
@@ -994,7 +1007,8 @@ Rules: append-only; written in the same transaction as the state change where on
 | `EXPORT_RECONCILED` | its own write | `selected`, `inFile`, `match` |
 | `EXPORT_BATCH_DELIVERED` | the `DELIVERED` transition | `deliveredAt`, `fileName`, `rowCount`, `bytes`, `completionSource` |
 | `EXPORT_BATCH_FAILED` | the `FAILED` transition | `failedStep`, `cause`, `lastError`, `jobAttempts` |
-| `EXPORT_RETRY_REQUESTED` | the attempt increment | `fromState`, `failedStep`, `newAttempt`, `reason` |
+| `EXPORT_RETRY_REQUESTED` | the attempt increment | `fromState`, `failedStep`, `newAttempt`, `reason`, `filterId`, `filterIdBefore` (only when the schedule's id changed) |
+| `EXPORT_REUSE_REFUSED` | the `EGRESS_REQUESTED → SCHEDULED` transition | `egressCorrelationId`, `failureReason`, `completionSource`, `newAttempt` |
 | `EXPORT_PRIOR_ATTEMPT_CANCELLED` / `EXPORT_PRIOR_ATTEMPT_CANCEL_REJECTED` | its own write, before the new egress request (step 3) or before `EGRESS_DID_NOT_FINISH` (step 5, check 2) | `cancelledCorrelationId`, `outcome` (`202` accepted / `409` already terminal) |
 | `EXPORT_BATCH_SUPERSEDED` | the `SUPERSEDED` transition | `supersededBy`, `reason` |
 | `EXPORT_BATCH_ACKNOWLEDGED` | the first claim on a batch by the ingestion module | `uploadId`, `vendorBatchId`, `daysToResponse` |
@@ -1028,12 +1042,15 @@ Rules: append-only; written in the same transaction as the state change where on
 | Filter field or operator misspelt | Refused by api-layer when the filter is saved; never reaches this service |
 | Filter value misspelt (for example a role that does not exist) | Matches nothing; batch `EMPTY`; E8 |
 | Wrong or deleted `filterId` on the schedule | Egress `FAILED: FILTER_NOT_USABLE`; batch `FAILED`; E4; operator fixes the schedule and retries |
-| Egress returns `403 SELECTION_SOURCE_DISABLED` | Batch `FAILED`; E4; retry once egress switches it on |
-| Egress returns `429 SELECTION_QUOTA_EXCEEDED` | JobRunr retries after `Retry-After` |
+| Egress returns `403 SELECTION_SOURCE_DISABLED` | Batch `FAILED`, cause `EGRESS_REFUSED`; E4; retry once egress switches it on |
+| Egress returns any other `400` | Batch `FAILED`, cause `EGRESS_REFUSED`; E4 |
+| Egress returns `429 SELECTION_QUOTA_EXCEEDED` | New request job at `Retry-After` (300 s), batch stays `SCHEDULED`; after 12 waits, JobRunr's retries |
 | Retry's earlier frozen list expired (over 7 days) or unfinished | Egress `400` on reuse; the job sends `filterId` again; `selection.reEvaluated = true` |
+| Egress accepts the reuse, then finds the list gone or empty | Egress `FAILED: REUSE_SOURCE_UNUSABLE`; batch back to `SCHEDULED` as the next attempt; `EXPORT_REUSE_REFUSED`; the filter is evaluated again |
+| Completion carried no selection counts | Finish job reads them from one status call; none there either → `FAILED`, cause `SELECTION_COUNTS_MISSING`; E4 |
 | Worker VM replaced or dies during any job | JobRunr re-enqueues the job; it re-reads the row state and continues |
 | Egress returns 409 | Same job; treated as success |
-| Egress returns 429 or 5xx | JobRunr retries; rate limit must exclude our identity (*Rollout*) |
+| Egress returns 5xx | JobRunr retries; rate limit must exclude our identity (*Rollout*) |
 | Egress publishes `FAILED` | Handler moves the batch to `FAILED` inline; E4; operator retry with `r2` |
 | Egress never publishes | Deadline check 1 at 6 hours finds `COMPLETED` → `FinishJob`; `EXPORT_EVENT_MISSED`; E7 |
 | Egress still running at 6 hours | `EXPORT_EGRESS_STALE`; E3; check 2 at 48 hours |
@@ -1064,7 +1081,7 @@ Rules: append-only; written in the same transaction as the state change where on
 
 | # | Ask | Today | Why we need it |
 | --- | --- | --- | --- |
-| 1 | Accept a saved filter id in the export request (`selection`) and resolve it in egress: freeze the list once per export, report counts in the status, reuse the list on a retry (`reuseSelectionFrom`), write the list-used file on request — CP-41069, design page 2282979391 | **Needs egress change.** An NPI list of at most 100 (`EgressConfig.java:32-33`; `EgressExportResource.java:346-375`) | One tenant per period must be one request and one file under one batch id, for up to 70,000 practitioners. A filter checked once at save and evaluated once in egress replaces our own selection and the 700-call job it needed |
+| 1 | Accept a saved filter id in the export request (`selection`) and resolve it in egress: freeze the list once per export, report counts in the status, reuse the list on a retry (`reuseSelectionFrom`), write the list-used file on request — CP-41069, design page 2282979391 | **Built** (CP-41069, merged in egress `main`). Before it, an NPI list of at most 100 (`EgressConfig.java:32-33`) | One tenant per period must be one request and one file under one batch id, for up to 70,000 practitioners. A filter checked once at save and evaluated once in egress replaces our own selection and the 700-call job it needed |
 | 2 | Make the request's correlation id and the job's generation time available to the template as record fields, the way `_certify_id` is today | **Needs egress change.** `_certify_id` is injected per record (`TemplateMappingExportPipeline.java:499`); the template can map a constant (`default_value`) but has no per-run value and no "now" function | The contract columns `export_batch_id` and `export_generated_at` are how the vendor echoes the batch on every row and knows the data's freshness. A template cannot know either value on its own; once egress exposes them as record fields, the template maps them like any other column (the attempt suffix is stripped with the existing `substitute` transformation) |
 | 3 | Let the template choose the joiner for multi-value columns | **Needs egress change.** Fixed `", "` (`TemplateFieldExtractor.java:705-721`) | The contract joins specialties and languages with `;`. Commas inside CSV fields are fragile for the vendor's parser, and some specialty names contain commas |
 | 4 | Suppress completion and failure emails for requests from our identity | **Needs egress change.** Every terminal export emails the initiating user (`ExportNotificationService.java:32-50`, SendGrid) | Our initiating user is a service identity; the emails bounce or land as noise and carry nothing the event does not |
