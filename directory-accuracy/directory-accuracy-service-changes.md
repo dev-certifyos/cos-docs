@@ -101,7 +101,8 @@ Nothing below is built. The code still implements the earlier own-selection desi
 ### How the work is done
 
 - All changes are in `directory-accuracy-service`; egress is owned by another team and is read, not changed.
-- One branch `feat/saved-filter-selection`, one PR; commit style as on `main` (`feat(export): …`).
+- One branch `feature/saved-filter-selection` (the `feature/<kebab-title>` rule in `AGENTS.md`), one PR; Conventional Commits as on `main` (`feat(export): …`).
+- Progress: phase 1 committed 2026-10-22 (`7dfb888`).
 - Phases, one commit each, each compiling all three source sets with its own test changes; stop after each phase and show compile, Spotless, Checkstyle, SpotBugs, and the leftover search.
   1. Client contracts: `EgressExportRequest.selection`, `EgressStatusResponse.selection`, `EgressEvent.failureReason` and `selection`.
   2. Domain: schedule `filterId`, preview and criteria classes deleted, batch `Selection`, states, `FailedStep`, `Reconciliation.selected`, audit event types.
@@ -119,7 +120,9 @@ Nothing below is built. The code still implements the earlier own-selection desi
 - **Request-time errors** (`ExportOrchestrationService.checkSelectionCanStart`):
   - `429 SELECTION_QUOTA_EXCEEDED` with `Retry-After: 300` (fixed, `SELECTION_RETRY_AFTER_SECONDS`).
   - `403 SELECTION_SOURCE_DISABLED`.
-  - `400 INVALID_REQUEST` "selection.reuse_selection_from …" when the reuse source is unusable at request time.
+  - `400 INVALID_REQUEST` when the reuse source is unusable at request time, message `selection.reuse_selection_from ` + one of: `does not name a selection export of this tenant and type`, `names a selection that is not finished`, `names a selection whose list has expired`.
+  - The same prefix also starts two request-form errors from `SelectionRequestValidator` (`cannot be combined with filter_id`, `must be 255 characters or less`); those are our bugs, not a reason to fall back.
+  - A selection beside a non-empty `npiFilter` or `tinFilter` is refused; an empty list passes.
   - `400 INVALID_REQUEST` "selection requires the cloud-run-jobs execution method" when egress runs any other execution method.
 - **Failures after acceptance** (`selection/SelectionFailure.java`): `FILTER_NOT_USABLE`, `SELECTION_SOURCE_UNAVAILABLE`, `SELECTION_SOURCE_MISCONFIGURED`, `SELECTION_SOURCE_INVALID_RESPONSE`, `SELECTION_TOO_LARGE`, `NO_MATCHING_PRACTITIONERS`, `SELECTION_COUNT_MISMATCH`, `SELECTION_WRITE_FAILED`, `LIST_USED_WRITE_FAILED`, `RESOLUTION_ABANDONED`, `REUSE_SOURCE_UNUSABLE`, `SELECTION_SLICE_LAUNCH_FAILED`.
 - **Reason format:** stored as `"REASON"` or `"REASON (detail)"` (`SelectionLauncher.reasonName`). Compare on the part before `" ("`.
@@ -182,7 +185,7 @@ Nothing below is built. The code still implements the earlier own-selection desi
   - Build the `selection` object.
     - First attempt: `{ "source": "SAVED_FILTER", "filterId": <batch.filterId>, "listUsed": true }`.
     - Retry (`attempt > 1`): `{ "reuseSelectionFrom": <previous correlationId>, "listUsed": true }`. The previous id is `batch.egress().correlationId()`, the value the cancel-before-retry already reads; read it before the new attempt overwrites it.
-    - Egress `400 INVALID_REQUEST` on a reuse request (message starts `selection.reuse_selection_from`): send the `filterId` form again and set `selection.reEvaluated = true`.
+    - Egress `400 INVALID_REQUEST` on a reuse request with one of the three unusable-source messages (see *What egress `main` already has*): send the `filterId` form again and set `selection.reEvaluated = true`. Any other `400` fails the batch.
   - `429 SELECTION_QUOTA_EXCEEDED`: schedule a new `RequestEgressJob` at now + `Retry-After` (300 seconds), same pattern as `IngestionJobEnqueuer` ("each wait is a new job"), so JobRunr's retries stay untouched.
   - `403 SELECTION_SOURCE_DISABLED` and any other `400`: mark the batch `FAILED` at `EGRESS`, alert E4.
   - Keep cancel-before-retry, template pin, `409` handling, destination, deadline scheduling as they are.
