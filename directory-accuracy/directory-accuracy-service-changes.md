@@ -107,6 +107,7 @@ Nothing below is built. The code still implements the earlier own-selection desi
   - Phases 2 and 3 committed together 2026-10-22 (`3fc82fd`): neither compiles without the other, because the jobs use every type the domain change removes. The `/npis` endpoint, `BatchViews`, the `npis` collection and indexes, and `Ids.npiId` went with them for the same reason.
   - Phase 4 committed 2026-10-22 (`4e67282`).
   - Phase 5 committed 2026-10-22 (`3596aa7`): practitioner list client and `selection.pages` metric removed; the read API, views and audit details had already moved with phases 2 to 4.
+  - Phase 6 committed 2026-10-22 (`0f95eb9`): `openapi/openapi.yaml` regenerated; runbook, README, HANDOFF updated; finding 109 in `docs/decisions.md`.
 - Phases, one commit each, each compiling all three source sets with its own test changes; stop after each phase and show compile, Spotless, Checkstyle, SpotBugs, and the leftover search.
   1. Client contracts: `EgressExportRequest.selection`, `EgressStatusResponse.selection`, `EgressEvent.failureReason` and `selection`.
   2. Domain: schedule `filterId`, preview and criteria classes deleted, batch `Selection`, states, `FailedStep`, `Reconciliation.selected`, audit event types.
