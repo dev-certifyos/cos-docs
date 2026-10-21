@@ -1,6 +1,6 @@
 # Directory accuracy service — saved filter flow and rename: what changed, what is left
 
-Tracker written 2026-10-21. Repository `CertifyOS/directory-accuracy-service`, local `pdm-dal-full/directory-accuracy-service`. Use this to pick the work up later without re-deriving anything.
+Tracker written 2026-10-21, updated 2026-10-22 after reading egress `main`. Repository `CertifyOS/directory-accuracy-service`, local `pdm-dal-full/directory-accuracy-service`. Use this to pick the work up later without re-deriving anything.
 
 ## Why this happened
 
@@ -23,6 +23,9 @@ Tracker written 2026-10-21. Repository `CertifyOS/directory-accuracy-service`, l
 - **`/v1` on every operator and review path** in both docs, matching the code. `/internal/…` push paths have no `/v1`.
 - **Module names unchanged:** collections `vendor_export_*` and `vendor_review_*`, permissions `vendor-export:*` and `vendor-review:*`, paths `/v1/vendor-exports` and `/v1/vendor-review`, audit actors `system:vendor-export` and `system:vendor-ingestion`, metrics `vendor_export.*`, the `vendor-ingestion` file-ingestion consumer.
 - **Companion docs stay local**; only the two design docs are published.
+- **Retry reuses the frozen list** (confirmed 2026-10-22). Every attempt of one batch exports the same practitioners; supersede evaluates the filter afresh.
+  - Egress keeps the correlation id we send (`<batchId>-rN`) and finds the earlier list by `practitioner__<tenant>__<previous correlationId>`.
+  - Egress refuses the reuse when that attempt is not a selection of this tenant, never reached `RESOLVED`, or its list has expired; we then send `filterId` and record `reEvaluated = true`.
 
 ## Done
 
@@ -95,12 +98,40 @@ Tracker written 2026-10-21. Repository `CertifyOS/directory-accuracy-service`, l
 
 Nothing below is built. The code still implements the earlier own-selection design. Paths are under `src/main/java/com/certifyos/directory_accuracy/` unless stated.
 
-### Blocked by
+### How the work is done
 
-- **CP-41069 (egress saved-filter selection):** In-Review. The request shape, status block, failure reasons, `reuseSelectionFrom`, and list-used file must exist in egress before this ships.
-- **CP-41070 (egress completion event):** In Progress. Must also carry `failureReason` and the `selection` block (not yet asked; see *Pending outside the code*).
+- All changes are in `directory-accuracy-service`; egress is owned by another team and is read, not changed.
+- One branch `feat/saved-filter-selection`, one PR; commit style as on `main` (`feat(export): …`).
+- Phases, one commit each, each compiling all three source sets with its own test changes; stop after each phase and show compile, Spotless, Checkstyle, SpotBugs, and the leftover search.
+  1. Client contracts: `EgressExportRequest.selection`, `EgressStatusResponse.selection`, `EgressEvent.failureReason` and `selection`.
+  2. Domain: schedule `filterId`, preview and criteria classes deleted, batch `Selection`, states, `FailedStep`, `Reconciliation.selected`, audit event types.
+  3. Jobs flow: `SelectJob` and `ExportNpi` deleted, enqueue sites, `RequestEgressJob` body, reuse fallback, `429` and `403`, reconciler, final-failure filter.
+  4. Completion: event handler, deadline check, `EMPTY`, reuse fallback after acceptance, `FinishJob` reconciliation.
+  5. Read API, metrics, audit details, api-layer client cleanup.
+  6. Repository docs and `openapi/openapi.yaml`.
+  7. Leftover search, comparison with the phase 1 design doc, PR.
+- Tests run in CI only.
+
+### What egress `main` already has (read 2026-10-22, `core-dal-egress-practitioner-async`)
+
+- **CP-41069 merged** (stacked PRs #154–#156, then #160 `CP-41069-r4-selection-flow`). Build against the code, not the design page.
+- **Request `selection`** (`model/SelectionRequest.java`): `source` (`SAVED_FILTER`), `filterId`, `expectedCount`, `listUsed`, `reuseSelectionFrom`. Camel case; snake case accepted as alias.
+- **Request-time errors** (`ExportOrchestrationService.checkSelectionCanStart`):
+  - `429 SELECTION_QUOTA_EXCEEDED` with `Retry-After: 300` (fixed, `SELECTION_RETRY_AFTER_SECONDS`).
+  - `403 SELECTION_SOURCE_DISABLED`.
+  - `400 INVALID_REQUEST` "selection.reuse_selection_from …" when the reuse source is unusable at request time.
+  - `400 INVALID_REQUEST` "selection requires the cloud-run-jobs execution method" when egress runs any other execution method.
+- **Failures after acceptance** (`selection/SelectionFailure.java`): `FILTER_NOT_USABLE`, `SELECTION_SOURCE_UNAVAILABLE`, `SELECTION_SOURCE_MISCONFIGURED`, `SELECTION_SOURCE_INVALID_RESPONSE`, `SELECTION_TOO_LARGE`, `NO_MATCHING_PRACTITIONERS`, `SELECTION_COUNT_MISMATCH`, `SELECTION_WRITE_FAILED`, `LIST_USED_WRITE_FAILED`, `RESOLUTION_ABANDONED`, `REUSE_SOURCE_UNUSABLE`, `SELECTION_SLICE_LAUNCH_FAILED`.
+- **Reason format:** stored as `"REASON"` or `"REASON (detail)"` (`SelectionLauncher.reasonName`). Compare on the part before `" ("`.
+- **Status `selection` block** (`SelectionStatusView`): `source`, `ref`, `state`, `cursor`, `expectedCount`, `requested`, `distinct`, `duplicates`, `matched`, `unmatched`, `parts`, `window`, `listUsedUri`, `reusedFrom`, `attempts`, `failureReason`.
+- **List-used file** is written whenever `listUsed` is true, reuse included (`SelectionRunner`).
+- **No completion event publisher yet** (CP-41070); completion is read from the status call until it ships.
+
+### Depends on
+
+- **CP-41070 (egress completion event):** In Progress. Should carry `failureReason` and the `selection` block (see *Pending outside the code*); until then the status call covers it.
 - **CP-44214 (api-layer saved-filter store):** built, switched off by default (`api-layer.saved-filter.enabled`). Must be on in each environment, with egress holding its shared read key.
-- A ticket for this work does not exist yet.
+- **Egress execution method `cloud-run-jobs`** in each environment, or every selection request gets `400`.
 
 ### Schedule: criteria out, `filterId` in
 
@@ -150,21 +181,22 @@ Nothing below is built. The code still implements the earlier own-selection desi
   - Remove `ExportNpiRepository` and the NPI read.
   - Build the `selection` object.
     - First attempt: `{ "source": "SAVED_FILTER", "filterId": <batch.filterId>, "listUsed": true }`.
-    - Retry (`attempt > 1`): `{ "reuseSelectionFrom": <previous correlationId>, "listUsed": true }`.
-    - Egress `400` on reuse (unfinished, expired, missing): send the `filterId` form again and set `selection.reEvaluated = true`.
-  - `429 SELECTION_QUOTA_EXCEEDED`: throw so JobRunr retries; honour `Retry-After` if the JobRunr retry policy allows, else document that backoff covers it.
+    - Retry (`attempt > 1`): `{ "reuseSelectionFrom": <previous correlationId>, "listUsed": true }`. The previous id is `batch.egress().correlationId()`, the value the cancel-before-retry already reads; read it before the new attempt overwrites it.
+    - Egress `400 INVALID_REQUEST` on a reuse request (message starts `selection.reuse_selection_from`): send the `filterId` form again and set `selection.reEvaluated = true`.
+  - `429 SELECTION_QUOTA_EXCEEDED`: schedule a new `RequestEgressJob` at now + `Retry-After` (300 seconds), same pattern as `IngestionJobEnqueuer` ("each wait is a new job"), so JobRunr's retries stay untouched.
   - `403 SELECTION_SOURCE_DISABLED` and any other `400`: mark the batch `FAILED` at `EGRESS`, alert E4.
   - Keep cancel-before-retry, template pin, `409` handling, destination, deadline scheduling as they are.
 - `export/jobs/DeadlineCheckJob.java`:
   - Read `selection` from the status response.
   - `COMPLETED` with `gcs_complete`: record `selection` with `EGRESS_COMPLETED`.
   - `FAILED` with `selection.failureReason = NO_MATCHING_PRACTITIONERS`: mark `EMPTY`.
+  - `FAILED` with `REUSE_SOURCE_UNUSABLE`: request again with the `filterId` form, `selection.reEvaluated = true`.
   - Any other `FAILED`: unchanged.
 - `export/jobs/FinishJob.java`:
   - Remove `ExportNpiRepository`.
   - Compare object metadata `totalRecords` with `batch.selection().distinct()`.
   - Write `reconciliation.selected`; audit `EXPORT_RECONCILED`.
-  - Decide what happens when `selection` is missing (an event without the block and no deadline check yet): one status call, or fail with a clear cause. Pick one and record it in `docs/decisions.md`.
+  - When `selection` is missing (an event without the block and no deadline check yet): one egress status call to fill it, then reconcile. Record in `docs/decisions.md`.
 - `export/jobs/ReconcilerJob.java`: `SCHEDULED` → `RequestEgressJob`; `EGRESS_COMPLETED` → `FinishJob`; remove the `NPIS_SELECTED` case and the `SelectJob` reference; update the Javadoc.
 - `export/jobs/BatchFinalFailureFilter.java`: remove the `SelectJob` → `SELECT` mapping; `RequestEgressJob`, `DeadlineCheckJob`, `FinishJob` map to `EGRESS`.
 - `export/jobs/BatchJobSupport.java` and `JobIds`: drop anything select-specific.
@@ -174,8 +206,9 @@ Nothing below is built. The code still implements the earlier own-selection desi
 - `clients/EgressExportRequest.java`:
   - Remove `npiFilter`.
   - Add `Selection selection` with `source`, `filterId`, `expectedCount` (not sent), `listUsed`, `reuseSelectionFrom`.
-  - Field names and nullability exactly as CP-41069's final contract; recheck against the merged egress code, not the design page.
-- `clients/EgressStatusResponse.java`: add `selection` (`state`, `requested`, `distinct`, `matched`, `unmatched`, `parts`, `listUsedUri`, `reusedFrom`, `attempts`, `failureReason`).
+  - Field names and nullability as egress `main` `SelectionRequest` (see *What egress `main` already has*).
+- `clients/EgressStatusResponse.java`: add `selection` (`state`, `requested`, `distinct`, `matched`, `unmatched`, `parts`, `listUsedUri`, `reusedFrom`, `attempts`, `failureReason`); ignore the other fields egress sends (`source`, `ref`, `cursor`, `expectedCount`, `duplicates`, `window`).
+- One helper reads a reason code from egress's `"REASON (detail)"` text; every reason check goes through it.
 - `clients/ApiLayerClient.java`: delete `practitionerFindMany`; delete `clients/PagedPractitioners.java` and `PractitionerRef` if nothing else uses them. Keep the egress-template methods.
 - `config/DirectoryAccuracyConfig.java` and `application.properties` hold no selection-only keys (checked 2026-10-21); the api-layer client config stays for templates.
 
@@ -185,6 +218,7 @@ Nothing below is built. The code still implements the earlier own-selection desi
 - `export/events/EgressEventHandler.java`:
   - `COMPLETED`: record `selection` with `EGRESS_COMPLETED`.
   - `FAILED` with `failureReason = NO_MATCHING_PRACTITIONERS`: move to `EMPTY` with `EXPORT_EVENT_RECEIVED` and `EXPORT_BATCH_EMPTY` in one transaction, delete the deadline job, alert E8.
+  - `FAILED` with `REUSE_SOURCE_UNUSABLE`: request again with the `filterId` form, `selection.reEvaluated = true`.
   - Other `FAILED`: unchanged.
 - `EXPORT_EVENT_RECEIVED` detail adds `failureReason` and `selectionDistinct`.
 - Message attribute `failureReason` is informational; the subscription filter stays on `initiator`.
@@ -229,7 +263,7 @@ Nothing below is built. The code still implements the earlier own-selection desi
   - Mismatch row points at `selection.listUsedUri`.
   - E2, E6, E8 wording; metrics list; pilot checklist step 3 becomes "confirm the filter's count in the filter module".
 - `AGENTS.md`, `HANDOFF.md`: any mention of selection, NPIs, preview.
-- `docs/decisions.md`: a new finding for the switch (what was removed, the request shape as egress built it, the missing-`selection` decision from `FinishJob`, the oasdiff note).
+- `docs/decisions.md`: a new finding for the switch (what was removed, the request shape as egress built it, both reuse fallbacks, the `429` wait as a new job, the missing-`selection` status call from `FinishJob`, the oasdiff note).
 - Terraform: no change (subscription and filter already match).
 
 ### Verification before the PR
@@ -238,15 +272,13 @@ Nothing below is built. The code still implements the earlier own-selection desi
 - Search for leftovers: `SelectJob`, `SelectionCriteria`, `SelectionSchema`, `SelectionPreview`, `ExportNpi`, `vendor_export_npis`, `npiFilter`, `NPIS_SELECTED`, `NPIS_REGISTERED`, `NPIS_RECONCILED`, `EXPORT_SELECTION_COMPLETED`, `practitionerFindMany`, `preview`, `registered` (in reconciliation), `FailedStep.SELECT`, `acknowledgedAt`, `inboundBatchId`. Only `docs/decisions.md` history may keep them.
 - CI green: unit, integration, `verifyOpenApi`, secrets, Snyk.
 - Compare against the phase 1 design doc section by section (Approach steps 0–8, Contracts steps 0–8, Data model, Audit) so the code and the published page say the same thing.
-- After egress ships CP-41069 and the event change: one staging run end to end with a real saved filter (store on, egress switch on, our tenant on the template pipeline). Check the request body, the event payload, `EMPTY` with a filter that matches nobody, a retry that reuses the list, and the reconciliation.
+- One staging run end to end with a real saved filter (store on, egress switch on, egress on `cloud-run-jobs`, our tenant on the template pipeline). Check the request body, the status block (and the event payload once CP-41070 ships), `EMPTY` with a filter that matches nobody, a retry that reuses the list, and the reconciliation.
 
 ## Pending outside the code
 
 - **Rotate the Atlassian API token** pasted in chat on 2026-10-21.
 - **Push cos-docs** (`928d4b1` and the uncommitted concepts update).
 - **Raise ask 5's extension with the egress team** on CP-41070: `failureReason` (reason code, null on `COMPLETED`, also as a message attribute) and the `selection` block (`requested`, `distinct`, `matched`, `unmatched`, `parts`, `listUsedUri`, `reusedFrom`) on every completion event. Why: tells an empty selection from a failure, gives reconciliation its expected count without a status call.
-- **Confirm with the egress team** (CP-41069 review): `listUsed` for a `reuseSelectionFrom` request writes a list-used file too; the exact `400` codes for a refused reuse; whether `429` carries `Retry-After` in seconds.
-- **Create the ticket** for the code change above (Type of Effort, Pod PDM, points in hours).
 - **Send DevOps the new names** for the Pulumi stack: finding 108 in `docs/decisions.md` lists them (instance groups, service accounts, secrets, hostname, registry, Pub/Sub subscription and dead-letter topic, database name).
 - **api-layer:** switch the saved-filter store on per environment and give egress its read key (CP-44214); operators create filters once the filter module is in use.
 - **Cleanup, optional:**
