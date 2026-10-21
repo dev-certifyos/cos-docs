@@ -105,6 +105,7 @@ Nothing below is built. The code still implements the earlier own-selection desi
 - Progress:
   - Phase 1 committed 2026-10-22 (`7dfb888`).
   - Phases 2 and 3 committed together 2026-10-22 (`3fc82fd`): neither compiles without the other, because the jobs use every type the domain change removes. The `/npis` endpoint, `BatchViews`, the `npis` collection and indexes, and `Ids.npiId` went with them for the same reason.
+  - Phase 4 committed 2026-10-22 (`4e67282`).
 - Phases, one commit each, each compiling all three source sets with its own test changes; stop after each phase and show compile, Spotless, Checkstyle, SpotBugs, and the leftover search.
   1. Client contracts: `EgressExportRequest.selection`, `EgressStatusResponse.selection`, `EgressEvent.failureReason` and `selection`.
   2. Domain: schedule `filterId`, preview and criteria classes deleted, batch `Selection`, states, `FailedStep`, `Reconciliation.selected`, audit event types.
@@ -195,7 +196,7 @@ Nothing below is built. The code still implements the earlier own-selection desi
   - Read `selection` from the status response.
   - `COMPLETED` with `gcs_complete`: record `selection` with `EGRESS_COMPLETED`.
   - `FAILED` with `selection.failureReason = NO_MATCHING_PRACTITIONERS`: mark `EMPTY`.
-  - `FAILED` with `REUSE_SOURCE_UNUSABLE`: request again with the `filterId` form, `selection.reEvaluated = true`.
+  - `FAILED` with `REUSE_SOURCE_UNUSABLE`: handled as in the event handler below.
   - Any other `FAILED`: unchanged.
 - `export/jobs/FinishJob.java`:
   - Remove `ExportNpiRepository`.
@@ -223,7 +224,7 @@ Nothing below is built. The code still implements the earlier own-selection desi
 - `export/events/EgressEventHandler.java`:
   - `COMPLETED`: record `selection` with `EGRESS_COMPLETED`.
   - `FAILED` with `failureReason = NO_MATCHING_PRACTITIONERS`: move to `EMPTY` with `EXPORT_EVENT_RECEIVED` and `EXPORT_BATCH_EMPTY` in one transaction, delete the deadline job, alert E8.
-  - `FAILED` with `REUSE_SOURCE_UNUSABLE`: request again with the `filterId` form, `selection.reEvaluated = true`.
+  - `FAILED` with `REUSE_SOURCE_UNUSABLE` (decided 2026-10-22: automatic): the same correlation id cannot be sent again (egress answers `409` for a known id, which the request job treats as accepted). So the batch goes `EGRESS_REQUESTED → SCHEDULED` as attempt + 1 with a new audit event `EXPORT_REUSE_REFUSED` (`egressCorrelationId`, `failureReason`, `completionSource`, `newAttempt`), and the egress request job runs for the new attempt. It asks to reuse the failed attempt, egress refuses at once ("not finished"), and the job sends the filter id with `reEvaluated = true`. One extra round trip, no extra batch state.
   - Other `FAILED`: unchanged.
 - `EXPORT_EVENT_RECEIVED` detail adds `failureReason` and `selectionDistinct`.
 - Message attribute `failureReason` is informational; the subscription filter stays on `initiator`.
@@ -283,6 +284,7 @@ Nothing below is built. The code still implements the earlier own-selection desi
 
 - **Rotate the Atlassian API token** pasted in chat on 2026-10-21.
 - **Push cos-docs** (`928d4b1` and the uncommitted concepts update).
+- **Phase 1 design doc follow-ups from the code:** state diagram and step 4 gain the `EGRESS_REQUESTED → SCHEDULED` edge for an unusable reuse; audit table gains `EXPORT_REUSE_REFUSED`; step 3 gains the 12-wait cap on `429`; step 6 gains `SELECTION_COUNTS_MISSING`.
 - **Raise ask 5's extension with the egress team** on CP-41070: `failureReason` (reason code, null on `COMPLETED`, also as a message attribute) and the `selection` block (`requested`, `distinct`, `matched`, `unmatched`, `parts`, `listUsedUri`, `reusedFrom`) on every completion event. Why: tells an empty selection from a failure, gives reconciliation its expected count without a status call.
 - **Send DevOps the new names** for the Pulumi stack: finding 108 in `docs/decisions.md` lists them (instance groups, service accounts, secrets, hostname, registry, Pub/Sub subscription and dead-letter topic, database name).
 - **api-layer:** switch the saved-filter store on per environment and give egress its read key (CP-44214); operators create filters once the filter module is in use.
